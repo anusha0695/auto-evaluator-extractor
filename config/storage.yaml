@@ -1,0 +1,40 @@
+# =============================================================================
+# extractor — storage configuration
+#
+# Each pipeline version maps to a set of persistence destinations. Pipeline
+# writes to and UI reads from the destinations listed here, so moving a bucket
+# or renaming a table only requires editing this file.
+# =============================================================================
+
+phase_1:
+  pipeline_version: v1
+
+  # ----- Local persistence (used when PERSISTENCE_BACKEND=local) -----
+  # Relative to repo root. Contains runs_v1.jsonl, extractions_v1.jsonl,
+  # and artifacts/<doc_id>/*.json. Already in .gitignore.
+  local_persistence_dir: local_runs
+
+  # ----- GCS artifacts (used when PERSISTENCE_BACKEND=bigquery) -----
+  # Raw DocAI responses, block_profiles, parser_hypothesis, agent traces,
+  # audit artifacts. Each doc lands under {prefix}/{doc_id}/.
+  artifacts_gcs_bucket: patient_clinical_trial
+  artifacts_gcs_prefix: extraction_outputs/phase1/
+
+  # ----- BigQuery tables (one row per pipeline run + one row per extraction).
+  bigquery_project:           medical-report-extraction
+  bigquery_dataset:           extractor_dev
+  bigquery_extractions_table: extractions_v1
+  bigquery_runs_table:        runs_v1
+
+  # ----- Firestore checkpointer for LangGraph state. Same project, BAA-covered.
+  firestore_database:              "(default)"
+  firestore_checkpoint_collection: langgraph_checkpoints_phase1
+
+  # ----- Input bucket the runner reads from (when --list-bucket is used).
+  input_gcs_bucket: patient_clinical_trial
+  input_gcs_prefix: patient_profiles/
+
+# Phase 2+ entries will be appended below as those phases ship.
+# phase_2: { ... }
+# phase_3: { ... }
+# phase_4: { ... }

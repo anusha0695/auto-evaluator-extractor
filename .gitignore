@@ -1,0 +1,99 @@
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ----- Virtual environments -----
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ----- Secrets / credentials -----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*-service-account*.json
+gcp-key*.json
+adc.json
+
+# ----- IDE / editors -----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ----- Test + coverage artifacts -----
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+*.cover
+.hypothesis/
+
+# ----- Streamlit -----
+.streamlit/secrets.toml
+
+# ----- Pipeline scratch (never commit real PHI) -----
+# Local runs may emit cached DocAI responses or pipeline traces with PHI.
+# Anything that holds real patient data should be excluded here.
+local_runs/
+local_artifacts/
+scratch/
+*.pdf.cache
+docai_response_*.json
+
+# ----- Snapshots (these ARE committed — explicit allow) -----
+!snapshots/
+!snapshots/**
+
+# ----- Ground truth (this IS committed — explicit allow) -----
+!ground_truth/
+!ground_truth/**
+
+# ----- Logs -----
+*.log
+logs/
+setup.log
+
+# ----- Production-prompt screenshots (may contain PHI from sample reports) -----
+prod_prompt_data/
+
+# ----- Office lockfiles -----
+~$*.docx
+~$*.xlsx
+~$*.pptx
+
+# ----- Pipeline persistence (local backend writes here; never commit) -----
+local_runs/
+local_artifacts/
+
+# ----- Pyproject stub (file was deleted; leave the line in case anyone resurrects it) -----
+pyproject.toml

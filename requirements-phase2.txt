@@ -1,0 +1,25 @@
+# Phase 2 — additional dependencies layered on top of requirements.txt.
+# Install order:
+#   1. Install Phase 1: pip install -r requirements.txt
+#   2. When Phase 2 work begins: pip install -r requirements-phase2.txt
+#
+# Phase 2 deps as of 2026-05:
+#
+#   medspacy   — negation detection. Critical for the Genomic_Variant_umbrella
+#                section: "JAK2 V617F Not Detected" must be tagged as a NEGATIVE
+#                finding, not as a positive variant call. demo.pdf is the
+#                canonical case where this matters.
+#
+# NOT needed (decisions made 2026-05-18):
+#   hgvs       — the Python library pulls in psycopg2 + the UTA Postgres DB,
+#                heavyweight infra we don't need. HGVS prefix conventions
+#                ("1849G>T" → "c.1849G>T", "V617F" → "p.V617F") are simple
+#                enough to handle with regex / string ops in
+#                preprocess/hgvs_normalize.py (no library).
+#   hgnc       — gene alias resolution (HER2 → ERBB2, etc). No pip package
+#                needed; HGNC publishes a free TSV at
+#                https://www.genenames.org/cgi-bin/download/custom. Phase 2
+#                downloads it once into config/data/hgnc_aliases.tsv and
+#                loads it as a dict at boot.
+
+medspacy           # negation detection (preprocess/medspacy_negation.py)

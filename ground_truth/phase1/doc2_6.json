@@ -1,0 +1,75 @@
+{
+  "doc_id": "doc2_6",
+  "source_pdf": "doc2_6.pdf",
+  "report_format": "unknown_vendor_v2",
+  "page_count": 5,
+  "schema_version": "genomic_pathology_v2",
+  "phase1_scoring_scope": "report_metadata only",
+  "ground_truth_extracted_by": "manual_review",
+  "ground_truth_notes": [
+    "Synthetic mock report from the doc2_* batch — Phase 1 scoring is restricted to the report_metadata section. Other umbrellas are emitted as empty placeholders.",
+    "Same layout as doc2_1: header has Patient/Specimen/'Ordered By' columns; footer carries patient/case/physician on every page.",
+    "'Ordered By' section header on page 1 has no value beneath it; physician 'Dr. Jorge Thomas' identified only from page footers.",
+    "Header diagnosis 'Triple-negative breast cancer' vs page-4 pathological diagnosis 'Infiltrating moderately-differentiated mammary carcinoma' — header is the clinical/referring diagnosis, page 4 is the pathological finding. Diagnoses are not part of report_metadata.",
+    "Sex field says 'Female' while name 'Robert Johnson' reads as male — mock-data inconsistency in source; system should extract what the report literally states. (Sex is not in schema v2 report_metadata.)",
+    "Vendor name absent — no vendor masthead or branding visible AND no product marker. Vendor_Name = null.",
+    "No practice / institution name visible anywhere.",
+    "Case Number 6846 serves as the accession identifier; no separate MRN. Per strict MRN rule, Patient_MRN = null."
+  ],
+  "genomic_pathology_extraction": {
+    "count_of_extracted_objects": 0,
+
+    "report_metadata": {
+      "total_pages": 5,
+      "report_title": "Final Report",
+      "llm_confidence_score": null,
+
+      "Patient_MRN": null,
+      "Patient_First_Name": "Robert",
+      "Patient_Last_Name": "Johnson",
+      "Patient_DOB": "1983-03-09",
+
+      "Vendor_Name": null,
+
+      "Collection_Date": "2023-06-21",
+      "Received_Date": "2023-06-24",
+      "Report_Date": null,
+
+      "Test_Name": "Molecular profiling (multi-biomarker panel)",
+      "Procedure": null,
+
+      "Ordering_Provider_First_Name": "Jorge",
+      "Ordering_Provider_Last_Name": "Thomas",
+      "Ordering_Provider_NPI": null,
+      "Ordering_Provider_Title": "Dr.",
+
+      "Practice_Name": null,
+      "Practice_NPI": null,
+      "Practice_Street_Address_1": null,
+      "Practice_Street_Address_2": null,
+      "Practice_City": null,
+      "Practice_State": null,
+      "Practice_ZIP_5digit": null,
+      "Practice_ZIP_4digit": null
+    },
+
+    "Genomic_Variant_umbrella": {
+      "count_of_Genomic_Variants": 0,
+      "llm_confidence_score": null,
+      "Genomic_Variants": []
+    },
+
+    "other_molecular_biomarker_umbrella": {
+      "count": 0,
+      "llm_confidence_score": null,
+      "other_molecular_biomarkers": []
+    },
+
+    "tested_biomarker_umbrella": {
+      "count_of_tested_biomarkers": 0,
+      "page_numbers": [],
+      "llm_confidence_score": null,
+      "tested_biomarkers": []
+    }
+  }
+}

@@ -1,0 +1,124 @@
+# =============================================================================
+# extractor — shared tool registry
+#
+# Tools used by the ReAct extractors and auditors. core/tool_registry.py reads
+# this file and registers each entry as a LangChain @tool with the matching
+# Pydantic input model.
+#
+# Adding a new tool: add an entry here + implement the handler at the listed
+# import path. No agent-class changes required — the Extractor reads its
+# tool_allowlist from teams.yaml and picks up matching registry entries.
+# =============================================================================
+
+tools:
+
+  # ---------------------------------------------------------------------------
+  # PDF / DocAI lookups — let agents fetch evidence from the source document
+  # ---------------------------------------------------------------------------
+
+  pdf_page_loader:
+    description: >
+      Return the rendered text of a specific page from the source PDF, plus the
+      list of DocAI layout blocks on that page (each with bbox and section_path).
+      Use to inspect a page when you need to ground a claim in the source.
+    handler: core.tool_registry.pdf_page_loader
+    input_schema:
+      page_number:
+        type: integer
+        required: true
+        description: 1-indexed page number.
+
+  pdf_text_search:
+    description: >
+      Case-insensitive substring search across every page of the source PDF.
+      Returns up to N matches, each with (page_number, bbox, surrounding_excerpt).
+      Use to locate a known label like 'MRN', 'Ordered By', 'Specimen Collected'.
+    handler: core.tool_registry.pdf_text_search
+    input_schema:
+      query:
+        type: string
+        required: true
+        description: Literal substring to search for (case-insensitive).
+      max_results:
+        type: integer
+        required: false
+        default: 5
+        description: Cap on number of matches returned.
+
+  docai_layout_lookup:
+    description: >
+      Return the DocAI layout block at the given (page_number, bbox) or by
+      section_path. Useful for inspecting structural context — what section
+      header sits above this block, what table this cell belongs to.
+    handler: core.tool_registry.docai_layout_lookup
+    input_schema:
+      page_number:
+        type: integer
+        required: true
+      section_path:
+        type: string
+        required: false
+        description: e.g. 'page_1/header/right_column'
+
+  # ---------------------------------------------------------------------------
+  # Domain validators — deterministic checks the agents can invoke
+  # ---------------------------------------------------------------------------
+
+  npi_validator:
+    description: >
+      Validate a 10-digit NPI using the Luhn-mod-10 check digit. Returns true if
+      the digit pattern is well-formed and the check digit matches. Use before
+      emitting Ordering_Provider_NPI / Practice_NPI to avoid passing garbage
+      through schema validation.
+    handler: core.tool_registry.npi_validator
+    input_schema:
+      npi:
+        type: string
+        required: true
+        description: Exactly 10 digits, no spaces or dashes.
+
+  date_parser:
+    description: >
+      Parse a date string in any common format (MM/DD/YYYY, DD-Mon-YYYY,
+      'August 12, 2025', ISO 8601, etc.) and return its ISO YYYY-MM-DD form.
+      Drops any time-of-day and timezone components. Returns null on failure.
+      Required for all date fields per schema-v2 DERIVED rule.
+    handler: core.tool_registry.date_parser
+    input_schema:
+      raw_date:
+        type: string
+        required: true
+        description: Date string as printed in the report.
+
+  schema_validate:
+    description: >
+      Run the schema-v2 Pydantic validator against a candidate output dict for
+      this team's schema section. Returns (ok, errors) without persisting
+      anything. Use as a self-check before declaring extraction complete.
+    handler: core.tool_registry.schema_validate
+    input_schema:
+      section:
+        type: string
+        required: true
+        description: Schema section name (e.g. 'report_metadata').
+      candidate:
+        type: object
+        required: true
+        description: Candidate JSON to validate.
+
+  # ---------------------------------------------------------------------------
+  # State reads — read-only access to upstream pipeline state
+  # ---------------------------------------------------------------------------
+
+  state_read:
+    description: >
+      Read a specific key out of the PipelineState. Allowed keys for an
+      Extractor are 'doc_profile', 'parser_hypothesis', and 'block_profiles'.
+      Use to retrieve Block Profiler tags (incl. fax_transport_noise) or
+      SciSpaCy candidate entities when deciding what to extract.
+    handler: core.tool_registry.state_read
+    input_schema:
+      key:
+        type: string
+        required: true
+        description: One of 'doc_profile', 'parser_hypothesis', 'block_profiles'.

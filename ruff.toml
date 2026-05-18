@@ -1,0 +1,27 @@
+# ruff — linter + formatter configuration
+# https://docs.astral.sh/ruff/configuration/
+
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv", "snapshots", "data", "ground_truth"]
+
+[lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "I",   # isort
+  "B",   # bugbear
+  "UP",  # pyupgrade
+  "SIM", # simplify
+]
+ignore = [
+  "E501",  # line length — enforced by the formatter
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["S101"]      # assert is fine in tests
+"scripts/**" = ["T201"]    # print() is fine in scripts
+
+[format]
+quote-style = "double"
+indent-style = "space"

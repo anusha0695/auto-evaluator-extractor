@@ -1,0 +1,93 @@
+# Reproducible install for the extractor pipeline.
+#
+# By design, this file has NO version pins except langchain-google-genai==4.2.2
+# (the only version that's been validated with our wrapper code). Every other
+# package is left to pip's resolver — transitive constraints from the packages
+# themselves (spaCy → scispacy compatibility, etc.) keep the set coherent.
+#
+# Install:
+#   python3.12 -m venv .venv && source .venv/bin/activate
+#   pip install --upgrade pip
+#   pip install -r requirements.txt
+#
+# Verify the in-process Medical NER models loaded:
+#   python -c "import spacy; nlp = spacy.load('en_ner_bionlp13cg_md'); print(nlp.pipe_names)"
+
+# ===== LangGraph + LangChain =====
+# Phase 1 uses LangGraph's built-in MemorySaver. Phase 4 swaps in our own
+# FirestoreCheckpointer when SME interrupt/resume arrives.
+#
+# Gemini wrapper: `langchain-google-genai` 4.2.2 — built on the newer
+# `google-genai` SDK that unifies Google AI Studio (dev, API key) and
+# Vertex AI (prod, BAA-covered) through a single `GOOGLE_GENAI_USE_VERTEXAI`
+# env flag. This is the ONLY pinned package — its API surface drives the
+# extractor wrapper code, so it must not float.
+langgraph
+langchain-core
+langchain-google-genai==4.2.2
+langchain                                        # for @tool decorator
+
+# ===== Google Cloud SDKs =====
+google-cloud-documentai
+google-cloud-storage
+google-cloud-bigquery
+google-cloud-firestore
+google-cloud-aiplatform
+
+# ===== Observability — OpenTelemetry → Cloud Trace + Cloud Logging + Cloud Monitoring =====
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-gcp-trace
+opentelemetry-instrumentation
+google-cloud-logging
+google-cloud-monitoring
+
+# ===== Schema, validation, templating =====
+pydantic
+jsonschema
+jinja2
+pyyaml
+
+# ===== Logging + retry =====
+structlog
+tenacity
+
+# ===== Streamlit UI =====
+streamlit
+pdf2image
+Pillow
+# poppler-utils is a system dep for pdf2image — install via `brew install poppler`
+# (macOS) or `apt-get install poppler-utils` (Debian/Ubuntu).
+
+# ===== In-process Medical NER stack =====
+# spaCy + SciSpaCy versions are left to the resolver — scispacy's own deps
+# constrain spacy to a compatible minor (3.7.x).
+spacy
+scispacy
+
+# ===== Date parsing =====
+python-dateutil
+
+# ===== Env loading (.env file → os.environ) =====
+python-dotenv
+
+# SciSpaCy NER model wheels (direct URL — they are not on PyPI).
+# The model files declare `Requires-Dist: scispacy>=0.5.4`, which the latest
+# scispacy (0.5.5) satisfies. v0.5.4 is the latest model-wheel version
+# published on AI2's S3 (v0.5.5 returns HTTP 404).
+https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bionlp13cg_md-0.5.4.tar.gz
+https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz
+
+# spaCy general-English NER model (PERSON / DATE / ORG / GPE).
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+
+# ===== Phase-2-forward dependencies are in requirements-phase2.txt =====
+# medspacy + hgvs need additional system deps (libpq-dev for hgvs's UTA
+# Postgres support). Installed during the Phase 2 build sprint, not Phase 1.
+
+# ===== Dev tooling =====
+pytest
+pytest-asyncio
+pytest-cov
+mypy
+ruff

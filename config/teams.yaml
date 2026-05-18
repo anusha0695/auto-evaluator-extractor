@@ -1,0 +1,60 @@
+# =============================================================================
+# extractor — Specialist Team registry
+#
+# Each team owns exactly one umbrella section of config/schemas/genomic_pathology_v2.json.
+# The same Extractor / Coverage Auditor / Arbiter agent classes are instantiated
+# per team with the team-specific prompt template and schema section.
+# =============================================================================
+
+# Path to the schema used for Pydantic generation + Gemini structured-output spec.
+# Single source of truth — when this file changes, no Python code needs to change.
+schema_path: config/schemas/genomic_pathology_v2.json
+
+teams:
+
+  metadata_team:
+    # ----- Schema binding -----
+    # The team output is validated against this section's Pydantic model
+    # (generated at runtime by core/schema_loader.py from the JSON Schema).
+    schema_section: report_metadata
+
+    # ----- Prompt templates -----
+    # The team-specific template; the renderer also pulls the base system
+    # prompts from config/prompts/system/ for each agent role.
+    prompt_template: config/prompts/metadata_team.j2
+
+    # ----- Model assignments (temperature locked at 0.0 per policy) -----
+    models:
+      extractor:        { name: gemini-2.5-pro,   temperature: 0.0 }
+      coverage_auditor: { name: gemini-2.5-pro,   temperature: 0.0 }
+      arbiter:          { name: gemini-2.5-flash, temperature: 0.0 }
+
+    # ----- Tool allowlist (subset of config/tools.yaml) -----
+    tool_allowlist:
+      - pdf_page_loader
+      - pdf_text_search
+      - docai_layout_lookup
+      - npi_validator
+      - date_parser
+      - schema_validate
+      - state_read
+
+    # ----- Routing thresholds -----
+    # If schema validation passes and the team's llm_confidence_score exceeds
+    # this, the decision router emits auto_accept; otherwise sme_flag.
+    auto_accept_confidence_threshold: 0.85
+
+    # ----- Coverage Auditor signal -----
+    # Mismatch between extracted-field count and parser_hypothesis count beyond
+    # this threshold raises a gap_signal that invokes the Arbiter.
+    coverage_gap_tolerance: 0.10
+
+# Phase 2 will register three more teams here:
+#
+#   genomic_variant_team:       schema_section: Genomic_Variant_umbrella
+#   molecular_biomarker_team:   schema_section: other_molecular_biomarker_umbrella
+#   tested_biomarker_team:      schema_section: tested_biomarker_umbrella
+#
+# No Python code change needed — teams.yaml + the new team's Jinja template
+# are sufficient because schema-loader generates the Pydantic models from
+# the JSON Schema.

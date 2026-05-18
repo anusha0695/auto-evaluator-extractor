@@ -1,0 +1,139 @@
+{# =============================================================================
+   Medical NER adapter prompt — Gemini 2.5 Flash @ T=0.0.
+
+   The SciSpaCy models (en_ner_bionlp13cg_md, en_ner_bc5cdr_md,
+   en_core_web_sm) are loaded in-process and run first; they emit raw
+   typed entities like:
+
+       { "text": "JAK2", "label": "GENE_OR_GENE_PRODUCT",
+         "page": 1, "char_start": 412, "char_end": 416,
+         "source_model": "en_ner_bionlp13cg_md" }
+
+   This Gemini call is a post-processor: it takes the SciSpaCy raw output
+   plus the per-page text and produces the structured ParserHypothesis that
+   downstream Coverage Auditors consume — specifically, it categorizes each
+   raw entity into one of the four schema-v2 umbrellas and drops obvious
+   false positives (e.g. "JAK2" appearing in a Reference list bibliography
+   shouldn't count as a tested-biomarker candidate).
+
+   Jinja context (provided by preprocess/medical_ner.py):
+
+     doc_id
+     pages                  list of {page_number, text, block_profiles_on_page}
+     raw_scispacy_entities  list of {text, label, page, char_start, char_end,
+                                       source_model}
+   ============================================================================= #}
+You are the **Medical NER Adapter** preprocessor. SciSpaCy and spaCy have
+already run on this document and produced a raw list of typed entities.
+Your job is to:
+
+1. **Categorize** each raw entity into a schema-v2 target umbrella, or drop
+   it as not-applicable.
+2. **Deduplicate** repeated mentions across pages (a gene named twice on
+   page 1 is one candidate, not two).
+3. **Filter** entities that fall in irrelevant blocks (references /
+   citations / disclaimers / fax-transport noise — the Block Profiler has
+   tagged these).
+4. **Annotate** each surviving candidate with the most likely target field
+   so the downstream Coverage Auditor can compare per-section.
+
+This output becomes the `parser_hypothesis` that each Specialist Team's
+Coverage Auditor uses as its recall safety net. False positives here cause
+Auditors to chase ghosts; false negatives mean misses won't be flagged.
+Calibrate precision and recall accordingly.
+
+You are Gemini 2.5 Flash at temperature 0.0.
+
+## Inputs
+
+**Document:** `{{ doc_id }}`
+
+**Per-page text + Block Profiler tags:**
+```json
+{{ pages | tojson(indent=2) }}
+```
+
+**Raw SciSpaCy entities:**
+```json
+{{ raw_scispacy_entities | tojson(indent=2) }}
+```
+
+## Closed vocabulary for `target_umbrella`
+
+- `report_metadata` — PERSON / DATE / ORG / GPE from `en_core_web_sm` that
+  map to patient identity, ordering provider, practice, vendor, dates.
+- `Genomic_Variant_umbrella` — `GENE_OR_GENE_PRODUCT` entities that appear
+  in a `results_table` block, or anywhere a coding-DNA / amino-acid change
+  notation is present nearby (`c.1849G>T`, `V617F`, `p.Val617Phe`).
+- `other_molecular_biomarker_umbrella` — `CHEMICAL`, `DISEASE`, or
+  non-gene biomarker mentions (TMB, MSI, PD-L1, HRD score).
+- `tested_biomarker_umbrella` — `GENE_OR_GENE_PRODUCT` entities that appear
+  in a panel listing (whether or not a variant was detected). Often
+  overlaps with Genomic_Variant_umbrella; emit both candidacies separately
+  in that case.
+- `drop` — entity is in a block tagged `references`, `disclaimer_or_notes`,
+  `fax_transport_noise`, `chart_image_caption`, or `cpt_codes`; or is a
+  SciSpaCy false positive (e.g. "DNA" tagged as a gene).
+
+## Closed vocabulary for `target_field_hint`
+
+For `report_metadata` candidates only — which specific schema field the
+entity most likely populates. Examples:
+
+- PERSON near "Ordering Physician(s):" label → `Ordering_Provider_First_Name` / `Ordering_Provider_Last_Name`
+- PERSON near "Patient Name" label → `Patient_First_Name` / `Patient_Last_Name`
+- DATE in a "Collection Date" cell → `Collection_Date`
+- DATE in a "Received Date" cell → `Received_Date`
+- DATE in a "Report Date" cell → `Report_Date`
+- DATE in a "DOB" cell → `Patient_DOB`
+- ORG matching vendor heuristics → `Vendor_Name`
+- ORG matching practice heuristics → `Practice_Name`
+
+Leave `target_field_hint` as `null` for `Genomic_Variant_umbrella` /
+`other_molecular_biomarker_umbrella` / `tested_biomarker_umbrella`
+candidates (those teams handle their own field-level routing).
+
+## Deduplication policy
+
+- Same `(text, target_umbrella)` appearing on multiple pages → one
+  candidate with `pages: [N1, N2, ...]`.
+- Same `text` appearing as both a `Genomic_Variant_umbrella` candidate
+  (in a results row) and a `tested_biomarker_umbrella` candidate (in a
+  panel list) → emit **two** entries, one per umbrella.
+
+## Output
+
+A single JSON object:
+
+```json
+{
+  "doc_id": "{{ doc_id }}",
+  "candidates": [
+    {
+      "text": "<surface form, preserve case>",
+      "target_umbrella": "<from closed vocabulary>",
+      "target_field_hint": "<schema field or null>",
+      "pages": [<int>, ...],
+      "evidence_excerpt": "<≤120-char surrounding text>",
+      "source_models": ["en_ner_bionlp13cg_md", "en_ner_bc5cdr_md", "en_core_web_sm"],
+      "confidence": <float 0.0-1.0>,
+      "rationale": "<one short sentence>"
+    }
+  ],
+  "counts_by_umbrella": {
+    "report_metadata": <int>,
+    "Genomic_Variant_umbrella": <int>,
+    "other_molecular_biomarker_umbrella": <int>,
+    "tested_biomarker_umbrella": <int>
+  },
+  "dropped_count": <int>,
+  "dropped_examples": [
+    { "text": "...", "drop_reason": "..." }
+  ]
+}
+```
+
+Do not wrap in markdown fences. Do not preface with prose. `counts_by_umbrella`
+must sum to `candidates | length`. `dropped_count` is the number of raw
+entities filtered out (NOT in `candidates`); include at most 5 representative
+examples in `dropped_examples`.
