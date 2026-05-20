@@ -190,7 +190,87 @@ Per the base instructions, emit a top-level float in [0.0, 1.0]. Calibrate:
 - <0.70 — you are guessing on a required field. The decision router will
   flag the doc to SME at <0.85.
 
+## 13. Provenance contract — REQUIRED
+
+For every field you emit in `report_metadata`, you MUST also emit a
+corresponding entry in `report_metadata.provenance` recording **where the
+value came from**. This is non-optional and powers the UI's block-centric
+explorer. Without provenance, the SME reviewer cannot verify your work.
+
+The `provenance` map is keyed by field name (matching the other 25 fields
+in this section). Each value is a small object:
+
+```json
+"provenance": {
+  "Patient_First_Name": {
+    "block_id": "b5",
+    "page": 1,
+    "type": "verbatim"
+  },
+  "Vendor_Name": {
+    "block_id": "b2",
+    "page": 1,
+    "type": "inferred",
+    "rationale": "Inferred from 'xT' product marker per vendor inference rule"
+  },
+  "Patient_MRN": {
+    "block_id": null,
+    "page": null,
+    "type": "absent"
+  },
+  "Collection_Date": {
+    "block_id": "b8",
+    "page": 1,
+    "type": "derived",
+    "rationale": "Normalized '08/12/2025 01:00:00 PM' → '2025-08-12'"
+  }
+}
+```
+
+### `type` values — pick exactly one per field
+
+- **`verbatim`** — value appears literally in the source. `block_id` MUST
+  cite a DocAI block whose text contains the value (or a normalized form
+  of it for proper-name fields). Use for: `Patient_First_Name`,
+  `Patient_Last_Name`, `Practice_*`, `Ordering_Provider_First_Name`,
+  `Ordering_Provider_Last_Name`, `Ordering_Provider_Title`,
+  `Test_Name`, `Procedure`, `report_title`, when those are stated outright.
+
+- **`inferred`** — value derived from documented signals (Rules 2, 4, 5).
+  `block_id` cites the block containing the SIGNAL (e.g. the `xT` product
+  marker), not a block containing the inferred value (which won't exist).
+  Include a `rationale` naming which rule fired.
+
+- **`derived`** — value was computed or normalized from a source. Use for
+  dates normalized to ISO YYYY-MM-DD (Rule 7), `total_pages` (computed from
+  the document), `Practice_State` (uppercased), proper-case name fields
+  (Rule 5 — `STANLEY` → `Stanley`). Cite the source block + rationale.
+
+- **`absent`** — value is null because the source has no value at this
+  field. `block_id` and `page` are null. Most `null` outputs use this.
+  Examples: most `Patient_MRN` (strict-MRN rule), most NPI fields, ZIP+4.
+
+### How to get block_ids
+
+Every tool result you receive contains `block_id` references:
+- `pdf_page_loader` returns a list of `blocks` for that page; each has `block_id`.
+- `pdf_text_search` returns matches with `block_id`.
+- `docai_layout_lookup` returns blocks with `block_id`.
+- `state_read('block_profiles')` returns the full classification with `block_id`s.
+
+**Cite only block_ids that appeared in tool results.** Fabricated block_ids
+will fail downstream validation.
+
+### Special case: `llm_confidence_score`
+
+This field is your own self-report, not extracted from source. Emit its
+provenance as:
+```json
+"llm_confidence_score": {"block_id": null, "page": null, "type": "derived",
+                          "rationale": "Model self-confidence; not extracted from source"}
+```
+
 ---
 
 Now proceed with the ReAct loop and produce your Final Answer in the exact
-JSON shape the base prompt specified.
+JSON shape the base prompt specified — including the `provenance` map.

@@ -1,0 +1,131 @@
+# =============================================================================
+# Deterministic Medical NER mapping tables.
+#
+# Consumed by preprocess/medical_ner.py to turn raw SciSpaCy/spaCy entities
+# into the typed ParserHypothesis WITHOUT an LLM call. Tunable here without
+# touching code — extend the stoplist / field-hint rules as you see misses
+# across the validation fixtures.
+#
+# Pipeline (per entity):
+#   1. drop if its containing block's text_role is in `drop_roles`
+#   2. drop if normalize(text) is in `stoplist`
+#   3. allowed_umbrellas = label_to_umbrellas[label]   (drop if label absent)
+#   4. umbrellas = allowed ∩ block.target_umbrella_hints
+#        if empty → fall back to `allowed` (recall safety net), confidence 0.6
+#        else                                              confidence 0.9
+#   5. group by (normalize(text), umbrella), preserving every occurrence
+#   6. for report_metadata: assign target_field_hint via `field_hint_rules`
+# =============================================================================
+
+# --- Table A: SciSpaCy/spaCy label → allowed schema-v2 umbrellas -------------
+# A label absent from this map means "not in schema v2" → the entity is
+# dropped. Genes are allowed in BOTH variant and tested-biomarker umbrellas;
+# the block context (step 4 intersection) narrows it.
+label_to_umbrellas:
+  # en_ner_bionlp13cg_md
+  GENE_OR_GENE_PRODUCT: [Genomic_Variant_umbrella, tested_biomarker_umbrella]
+  AMINO_ACID:           [Genomic_Variant_umbrella]
+  SIMPLE_CHEMICAL:      [other_molecular_biomarker_umbrella]
+  CANCER:               [other_molecular_biomarker_umbrella]
+  PATHOLOGICAL_FORMATION: [other_molecular_biomarker_umbrella]
+  # en_ner_bc5cdr_md
+  CHEMICAL:             [other_molecular_biomarker_umbrella]
+  DISEASE:              [other_molecular_biomarker_umbrella]
+  # en_core_web_sm (OntoNotes)
+  PERSON:               [report_metadata]
+  DATE:                 [report_metadata]
+  ORG:                  [report_metadata]
+  GPE:                  [report_metadata]
+  LOC:                  [report_metadata]
+  FAC:                  [report_metadata]
+  # Everything else (CELL, TISSUE, ORGAN, ORGANISM, CARDINAL, PERCENT,
+  # QUANTITY, ORDINAL, MONEY, TIME, NORP, PRODUCT, EVENT, WORK_OF_ART, LAW,
+  # LANGUAGE, ANATOMICAL_SYSTEM, ...) is intentionally omitted → dropped.
+
+# --- Drop-set: block roles where EVERY entity is dropped ---------------------
+# Confirmed with user: electronic_signature, page_header, page_footer ARE
+# dropped (signature is not a candidate; header/footer duplicate the primary
+# metadata block).
+drop_roles:
+  - references
+  - cpt_codes
+  - fax_transport_noise
+  - chart_image_caption
+  - disclaimer_or_notes
+  - electronic_signature
+  - page_header
+  - page_footer
+
+# --- Stoplist: known SciSpaCy false positives (case-insensitive) -------------
+# This is the deterministic substitute for the LLM's semantic FP filtering.
+# Extend as real misses surface across fixtures.
+stoplist:
+  - dna
+  - rna
+  - gene
+  - genes
+  - mutation
+  - mutations
+  - mutant
+  - allele
+  - patient
+  - date
+  - result
+  - results
+  - test
+  - tests
+  - percent
+  - specimen
+  - sample
+  - report
+  - blood
+  - normal
+  - negative
+  - positive
+  - detected
+
+# --- field_hint rules: report_metadata entities → specific schema field ------
+# Each rule fires when `entity_label` matches AND one of `near_labels`
+# (case-insensitive substring) appears to the LEFT of the entity within its
+# containing block's text. First matching rule wins (top to bottom).
+# `field` must be a real report_metadata schema field name.
+field_hint_rules:
+  - entity_label: DATE
+    near_labels: ["collection date", "collected", "draw date"]
+    field: Collection_Date
+  - entity_label: DATE
+    near_labels: ["received date", "received"]
+    field: Received_Date
+  - entity_label: DATE
+    near_labels: ["report date", "reported", "final report"]
+    field: Report_Date
+  - entity_label: DATE
+    near_labels: ["dob", "date of birth", "d.o.b"]
+    field: Patient_DOB
+  - entity_label: PERSON
+    near_labels: ["ordering physician", "treating physician", "ordered by",
+                  "physician", "provider"]
+    field: Ordering_Provider_Last_Name
+  - entity_label: PERSON
+    near_labels: ["patient name", "patient", "name:"]
+    field: Patient_Last_Name
+  - entity_label: ORG
+    near_labels: ["client", "practice", "clinic", "ordering facility"]
+    field: Practice_Name
+  # Vendor is recognized by name match rather than a left-label; handled
+  # separately in code via `vendor_names`. Listed here for documentation.
+
+# --- Vendor recognition: ORG entities matching these (case-insensitive
+# substring) get field_hint = Vendor_Name regardless of nearby label. -------
+vendor_names:
+  - neogenomics
+  - tempus
+  - foundation medicine
+  - foundationone
+  - caris
+  - guardant
+  - myriad
+  - quest
+  - labcorp
+  - invitae
+  - genomic health

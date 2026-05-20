@@ -31,10 +31,10 @@ import core.env_loader  # noqa: E402, F401
 import streamlit as st  # noqa: E402
 
 from ui.phase1.data_layer import load_extraction  # noqa: E402
-from ui.phase1.pages import (  # noqa: E402
+from ui.phase1.views import (  # noqa: E402
+    explorer_view,
     metadata_extraction_view,
     overview,
-    preprocessing_view,
 )
 from ui.phase1.results_browser import render as render_sidebar  # noqa: E402
 
@@ -70,15 +70,15 @@ def main() -> None:
     # ----- Page tabs -----------------------------------------------------
     extraction = load_extraction(run.doc_id)
 
-    tab_overview, tab_preproc, tab_meta = st.tabs(
-        ["📄 Overview", "📐 Preprocessing", "🔍 Metadata extraction"]
+    tab_explorer, tab_overview, tab_meta = st.tabs(
+        ["🧩 Block explorer", "📄 Overview", "🔍 Metadata extraction"]
     )
+
+    with tab_explorer:
+        explorer_view.render(run=run)
 
     with tab_overview:
         overview.render(run=run, extraction=extraction)
-
-    with tab_preproc:
-        preprocessing_view.render(run=run)
 
     with tab_meta:
         metadata_extraction_view.render(run=run, extraction=extraction)

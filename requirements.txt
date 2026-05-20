@@ -59,6 +59,13 @@ Pillow
 # poppler-utils is a system dep for pdf2image — install via `brew install poppler`
 # (macOS) or `apt-get install poppler-utils` (Debian/Ubuntu).
 
+# pdfplumber — pure-Python PDF text-position extractor. Used as a fallback
+# to synthesize bounding boxes when the pinned DocAI Layout Parser doesn't
+# emit them on the wire (it ignores process_options.layout_config
+# .return_bounding_boxes for v1.6 on certain versions). Also used by the
+# UI to render PDF page overlays.
+pdfplumber
+
 # ===== In-process Medical NER stack =====
 # spaCy + SciSpaCy versions are left to the resolver — scispacy's own deps
 # constrain spacy to a compatible minor (3.7.x).

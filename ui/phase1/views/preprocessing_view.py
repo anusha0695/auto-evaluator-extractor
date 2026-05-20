@@ -81,7 +81,10 @@ def render(*, run: RunSummary) -> None:
             "page_number": b.get("page_number"),
             "bbox": b.get("bbox"),
             "text_role": prof.get("text_role", "other"),
-            "target_umbrella_hint": prof.get("target_umbrella_hint"),
+            "target_umbrella_hint": ", ".join(
+                prof.get("target_umbrella_hints")
+                or ([prof["target_umbrella_hint"]] if prof.get("target_umbrella_hint") else [])
+            ) or None,
             "confidence": prof.get("confidence"),
         })
 

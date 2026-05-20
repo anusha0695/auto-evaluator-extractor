@@ -34,21 +34,44 @@ class BlockInfo(TypedDict, total=False):
     text: str
 
 
+UmbrellaHint = Literal[
+    "report_metadata",
+    "Genomic_Variant_umbrella",
+    "other_molecular_biomarker_umbrella",
+    "tested_biomarker_umbrella",
+    "none",
+]
+
+
 class BlockProfile(TypedDict, total=False):
-    """One Block Profiler classification for a single block."""
+    """One Block Profiler classification for a single block.
+
+    R2: `target_umbrella_hints` is a LIST — a single block can legitimately
+    feed more than one umbrella (e.g. a results_table holds both gene-level
+    variant rows AND panel membership, so it hints both Genomic_Variant and
+    tested_biomarker). `["none"]` means no team needs this block.
+    """
 
     block_id: str
     page_number: int
     text_role: str                    # closed vocab in config/prompts/preprocess/block_profiler.j2
-    target_umbrella_hint: Literal[
-        "report_metadata",
-        "Genomic_Variant_umbrella",
-        "other_molecular_biomarker_umbrella",
-        "tested_biomarker_umbrella",
-        "none",
-    ]
+    target_umbrella_hints: list[UmbrellaHint]
     confidence: float
     rationale: str
+
+
+class BlockSpan(TypedDict, total=False):
+    """Where a block's text sits inside the concatenated page text.
+
+    Recorded at concat time in docai_parser so the Medical NER stage can map
+    a SciSpaCy entity's page-relative char offset back to its source block
+    EXACTLY (no fuzzy substring matching). `start`/`end` are offsets into the
+    owning PageText.text.
+    """
+
+    block_id: str
+    start: int
+    end: int
 
 
 class PageText(TypedDict, total=False):
@@ -57,6 +80,7 @@ class PageText(TypedDict, total=False):
     page_number: int
     text: str
     block_ids_on_page: list[str]
+    block_spans: list[BlockSpan]      # 2C: block_id → [start, end] in `text`
 
 
 class DocProfile(TypedDict, total=False):
@@ -70,8 +94,27 @@ class DocProfile(TypedDict, total=False):
     fax_header_blocks_removed: int    # count of blocks dropped by fax_header_filter
 
 
+class Occurrence(TypedDict, total=False):
+    """One place an entity appeared. 1A: candidates carry the full list of
+    occurrences so a downstream specialist team can see every mention site
+    (with its block + role), not just a flattened page list.
+    """
+
+    block_id: str
+    page: int
+    char_start: int
+    char_end: int
+    text_role: str                    # role of the containing block
+    evidence_excerpt: str             # ~120 chars around the hit
+
+
 class ParserHypothesisCandidate(TypedDict, total=False):
-    """One candidate emitted by the Medical NER adapter."""
+    """One candidate emitted by the Medical NER adapter.
+
+    1A: `occurrences` is the source-of-truth provenance list. `pages` and
+    `evidence_excerpt` are DERIVED from it (kept for back-compat with the
+    CoverageAuditor, which reads them today).
+    """
 
     text: str
     target_umbrella: Literal[
@@ -81,8 +124,9 @@ class ParserHypothesisCandidate(TypedDict, total=False):
         "tested_biomarker_umbrella",
     ]
     target_field_hint: str | None     # schema field name, or None for non-metadata umbrellas
-    pages: list[int]
-    evidence_excerpt: str
+    occurrences: list[Occurrence]     # 1A: every mention site, grouped under this (text, umbrella)
+    pages: list[int]                  # DERIVED: sorted(unique o.page for o in occurrences)
+    evidence_excerpt: str             # DERIVED: occurrences[0].evidence_excerpt
     source_models: list[str]
     confidence: float
     rationale: str

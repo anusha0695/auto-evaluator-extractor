@@ -221,7 +221,8 @@ class Persistence:
         return uri
 
     async def _write_artifact_local(
-        self, doc_id: str, kind: str, content: bytes | str | dict[str, Any], *, ext: str,
+        self, doc_id: str, kind: str, content: bytes | str | dict[str, Any] | list[Any],
+        *, ext: str,
     ) -> str:
         path = self._cfg.local_dir_resolved / "artifacts" / doc_id / f"{kind}.{ext}"
 
@@ -229,12 +230,24 @@ class Persistence:
             path.parent.mkdir(parents=True, exist_ok=True)
             if isinstance(content, bytes):
                 path.write_bytes(content)
-            elif isinstance(content, dict):
+            elif isinstance(content, (dict, list)):
+                # Important: lists must also go through json.dumps. The previous
+                # version routed lists through `str(content)` which produced
+                # Python repr (single quotes, `{'block_id': '1'}`) — not valid
+                # JSON. Block profiles and parser hypothesis candidates are
+                # passed as TypedDict lists, which is how that bug landed.
                 path.write_text(
                     json.dumps(content, indent=2, default=str), encoding="utf-8"
                 )
+            elif isinstance(content, str):
+                # Caller pre-serialized the content (e.g. DocAI does its own
+                # `json.dumps()` before passing the string in). Write verbatim.
+                path.write_text(content, encoding="utf-8")
             else:
-                path.write_text(str(content), encoding="utf-8")
+                # Last resort — anything else gets json-dumped via default=str.
+                path.write_text(
+                    json.dumps(content, indent=2, default=str), encoding="utf-8"
+                )
 
         await asyncio.to_thread(_do_write)
         uri = f"file://{path}"

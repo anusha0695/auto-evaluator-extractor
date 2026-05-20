@@ -79,10 +79,11 @@ fax machine, not the lab — it does not represent report content.
 header/footer text (e.g. patient name + case number on every page); they
 are NOT the fax band.
 
-## Closed vocabulary for `target_umbrella_hint`
+## Closed vocabulary for `target_umbrella_hints`
 
-For each block, indicate which schema-v2 umbrella section is most likely
-to extract content from it:
+For each block, list **every** schema-v2 umbrella section that could extract
+content from it. A block often feeds MORE THAN ONE umbrella — emit all that
+apply, as a JSON array:
 
 - `report_metadata` — patient, vendor, dates, ordering provider, practice
 - `Genomic_Variant_umbrella` — gene-level variant rows
@@ -90,6 +91,22 @@ to extract content from it:
 - `tested_biomarker_umbrella` — panel grid listing all tested genes
 - `none` — block is metadata for the report itself (signature, billing,
   disclaimer, fax noise, chart caption, etc.) — no team needs it
+
+Multi-umbrella guidance (emit ALL that apply):
+
+- A `results_table` block holds gene-level variant rows AND establishes that
+  those genes were on the panel →
+  `["Genomic_Variant_umbrella", "tested_biomarker_umbrella"]`.
+- A `panel_or_test_name` block names the test (a metadata field captures the
+  name) AND lists tested genes → often
+  `["report_metadata", "tested_biomarker_umbrella"]`.
+- A pure `specimen_metadata` / `patient_demographics` / `ordering_provider`
+  block → `["report_metadata"]` only.
+- `none` is EXCLUSIVE: if a block is `none`, emit exactly `["none"]`, never
+  combined with a real umbrella.
+
+When only one umbrella applies, emit a single-element array
+(e.g. `["report_metadata"]`).
 
 ## Output
 
@@ -101,7 +118,7 @@ A single JSON array, one entry per input block, **in input order**:
     "block_id": "<from input>",
     "page_number": <int>,
     "text_role": "<from closed vocabulary>",
-    "target_umbrella_hint": "<from closed vocabulary>",
+    "target_umbrella_hints": ["<one or more from closed vocabulary>"],
     "confidence": <float 0.0-1.0>,
     "rationale": "<one short sentence>"
   },
@@ -111,4 +128,5 @@ A single JSON array, one entry per input block, **in input order**:
 
 Do not wrap in markdown fences. Do not preface with prose. Do not emit
 blocks not in the input. Do not skip any input blocks. The array length
-must equal the input `blocks` length.
+must equal the input `blocks` length. `target_umbrella_hints` must always be
+a non-empty array.

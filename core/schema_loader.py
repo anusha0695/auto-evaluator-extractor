@@ -308,7 +308,13 @@ class SchemaLoader:
             return list[inner]  # type: ignore[valid-type]
 
         if t == "object":
-            # Recurse — generate a nested model.
+            # Free-form object (no `properties` defined) → accept any dict.
+            # Used for fields like `_provenance` where the keyset is dynamic
+            # (one entry per emitted field) and shape validation happens
+            # at a higher layer (jsonschema or a custom verifier).
+            if not field_schema.get("properties"):
+                return dict[str, Any]
+            # Otherwise: recurse and generate a nested model.
             nested_name = f"{parent_name}__{field_name}"
             return self._build_pydantic_model(nested_name, field_schema)
 

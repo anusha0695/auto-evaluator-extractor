@@ -69,8 +69,11 @@ DATE_FIELDS = {
     "Report_Date",
 }
 
-# Phase 1 doesn't score this — it's a model self-report, not a target.
-EXCLUDED_FIELDS = {"llm_confidence_score"}
+# Fields excluded from scoring — they're meta-data, not extraction targets.
+EXCLUDED_FIELDS = {
+    "llm_confidence_score",   # model self-report
+    "provenance",              # per-field source citations (Option B); UI consumes it
+}
 
 # Fields where strict equality is required (no normalization).
 STRICT_FIELDS = {

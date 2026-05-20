@@ -203,16 +203,23 @@ def _make_pdf_text_search(state: PipelineState) -> StructuredTool:
             raise ToolError("pdf_text_search: state.doc_profile is missing")
         pat = re.compile(re.escape(query), re.IGNORECASE)
         matches: list[dict[str, Any]] = []
-        for p in doc_profile.get("pages", []) or []:
-            text = p.get("text", "") or ""
-            for m in pat.finditer(text):
+        # Search PER BLOCK so every match carries the block_id the Extractor
+        # needs for its provenance citation. (Earlier versions searched the
+        # concatenated per-page text, which couldn't anchor to a block.)
+        for b in doc_profile.get("blocks", []) or []:
+            btext = b.get("text", "") or ""
+            if not btext:
+                continue
+            for m in pat.finditer(btext):
                 start = max(0, m.start() - 40)
-                end = min(len(text), m.end() + 40)
+                end = min(len(btext), m.end() + 40)
                 matches.append({
-                    "page_number": p.get("page_number"),
+                    "block_id": b.get("block_id"),
+                    "page_number": b.get("page_number"),
+                    "section_path": b.get("section_path"),
                     "match_start": m.start(),
                     "match_end": m.end(),
-                    "excerpt": text[start:end],
+                    "excerpt": btext[start:end],
                 })
                 if len(matches) >= max_results:
                     break
@@ -224,8 +231,10 @@ def _make_pdf_text_search(state: PipelineState) -> StructuredTool:
         func=_handler,
         name="pdf_text_search",
         description=(
-            "Case-insensitive substring search across every page of the source PDF. "
-            "Returns up to N matches with surrounding excerpts."
+            "Case-insensitive substring search across every DocAI block. Returns up "
+            "to N matches; each match carries `block_id`, `page_number`, and a "
+            "surrounding excerpt. Use the returned `block_id` when citing this "
+            "evidence in the `_provenance` map of your final answer."
         ),
         args_schema=PdfTextSearchInput,
     )

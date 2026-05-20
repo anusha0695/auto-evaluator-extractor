@@ -46,6 +46,7 @@ from core.state import (
     ParserHypothesis,
     PipelineState,
 )
+from preprocess.bbox_synthesizer import BboxSynthesizer
 from preprocess.block_profiler import BlockProfiler
 from preprocess.docai_parser import DocAIParser
 from preprocess.fax_header_filter import FaxHeaderFilter
@@ -67,6 +68,7 @@ class PreprocessNodeDependencies:
     block_profiler: BlockProfiler
     medical_ner: SciSpaCyMedicalNER
     persistence: Persistence
+    bbox_synthesizer: BboxSynthesizer | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +118,29 @@ def make_preprocess_node(deps: PreprocessNodeDependencies):
                 raw_uri,
             )
 
+            # ----- 1b. Bbox synthesis fallback ---------------------------
+            # The pinned Layout Parser v1.6 processor doesn't emit
+            # bounding_box even with return_bounding_boxes=True. If every
+            # block lacks a bbox and we have the raw PDF bytes locally,
+            # synthesize bboxes from pdfplumber word positions so the UI
+            # can render overlays. No-op when bboxes are already present.
+            if deps.bbox_synthesizer is not None and raw_bytes:
+                blocks_list = list(doc_profile.get("blocks") or [])
+                missing = sum(1 for b in blocks_list if not (b.get("bbox") or []))
+                if missing:
+                    try:
+                        synthesized = deps.bbox_synthesizer.synthesize(
+                            raw_bytes, blocks_list,
+                        )
+                        doc_profile["blocks"] = list(synthesized)
+                    except Exception as exc:
+                        # Non-fatal: UI overlays are a nice-to-have, not
+                        # a correctness requirement for extraction.
+                        logger.warning(
+                            "BboxSynthesizer failed for doc_id=%s (%s) — "
+                            "continuing without overlays.", doc_id, exc,
+                        )
+
             # ----- 2. Fax-header filter (deterministic) -----------------
             fax_result = deps.fax_filter.filter(
                 pages=list(doc_profile.get("pages") or []),
@@ -125,9 +150,9 @@ def make_preprocess_node(deps: PreprocessNodeDependencies):
             doc_profile["fax_header_blocks_removed"] = fax_result.blocks_flagged
 
             # ----- 3 & 4. Block Profiler ∥ SciSpaCy raw extraction -----
-            #     (Gemini post-processor is sequential after both finish so
-            #      it can see block_profiles to drop entities in fax-noise /
-            #      reference blocks.)
+            #     (Deterministic NER post-processor is sequential after both
+            #      finish so it can see block_profiles to resolve umbrellas
+            #      and drop entities in fax-noise / reference blocks.)
             try:
                 profiles_task = deps.block_profiler.profile(
                     doc_id=doc_id,
@@ -154,7 +179,7 @@ def make_preprocess_node(deps: PreprocessNodeDependencies):
 
             doc_profile["block_profiles"] = list(block_profiles)
 
-            # ----- 5. Medical NER post-processor (Gemini Flash) ---------
+            # ----- 5. Medical NER post-processor (deterministic) --------
             parser_hypothesis = await deps.medical_ner.post_process(
                 doc_id=doc_id,
                 pages=list(doc_profile.get("pages") or []),
@@ -163,12 +188,22 @@ def make_preprocess_node(deps: PreprocessNodeDependencies):
             )
 
             # ----- 6. Cache outputs to GCS ------------------------------
+            # `blocks` (bbox + text + page + section_path) is persisted as a
+            # clean artifact so the UI can render overlays by block_id without
+            # re-walking the nested docai_raw.json proto. `pages` (with
+            # block_spans) is persisted too for completeness.
             await asyncio.gather(
                 deps.persistence.write_artifact(
                     doc_id, "block_profiles", list(block_profiles)
                 ),
                 deps.persistence.write_artifact(
                     doc_id, "parser_hypothesis", dict(parser_hypothesis)
+                ),
+                deps.persistence.write_artifact(
+                    doc_id, "blocks", list(doc_profile.get("blocks") or [])
+                ),
+                deps.persistence.write_artifact(
+                    doc_id, "pages", list(doc_profile.get("pages") or [])
                 ),
             )
 

@@ -37,9 +37,42 @@ from core.errors import DocAIError
 from core.gcs_client import GcsUri
 from core.observability import trace
 from core.persistence import Persistence
-from core.state import BlockInfo, DocProfile, PageText
+from core.state import BlockInfo, BlockSpan, DocProfile, PageText
 
 logger = logging.getLogger(__name__)
+
+
+def concat_blocks_with_spans(
+    blocks_on_page: list[BlockInfo],
+    *,
+    exclude_block_ids: set[str] | None = None,
+) -> tuple[str, list[BlockSpan]]:
+    """Concatenate the given blocks' text (newline-joined) and record each
+    block's [start, end) char span within the result.
+
+    Shared by DocAIParser (initial page text) and FaxHeaderFilter (rebuild
+    after dropping fax-noise blocks) so the spans always stay valid against
+    the exact text SciSpaCy will run on. `exclude_block_ids` skips blocks
+    (e.g. fax-noise) without disturbing the offsets of the survivors.
+    """
+    exclude = exclude_block_ids or set()
+    parts: list[str] = []
+    spans: list[BlockSpan] = []
+    cursor = 0
+    for b in blocks_on_page:
+        if b.get("block_id") in exclude:
+            continue
+        btext = (b.get("text") or "").strip()
+        if not btext:
+            continue
+        if parts:
+            cursor += 1  # the "\n" separator join() will insert
+        start = cursor
+        end = start + len(btext)
+        spans.append(BlockSpan(block_id=b["block_id"], start=start, end=end))
+        parts.append(btext)
+        cursor = end
+    return "\n".join(parts), spans
 
 
 class DocAIParser:
@@ -145,19 +178,33 @@ class DocAIParser:
         client = await self._get_client()
         source_label = gcs_uri or f"<inline {len(raw_pdf_bytes or b'')}-byte PDF>"
 
+        # IMPORTANT: Layout Parser only returns bounding_box coordinates when
+        # process_options.layout_config.return_bounding_boxes is explicitly
+        # enabled. Without this, every Block comes back spatially blank and
+        # the UI overlay layer has nothing to draw. Enable always.
+        process_options = documentai.ProcessOptions(
+            layout_config=documentai.ProcessOptions.LayoutConfig(
+                return_bounding_boxes=True,
+            ),
+        )
+
         if gcs_uri is not None:
             gcs_doc = documentai.GcsDocument(
                 gcs_uri=gcs_uri, mime_type="application/pdf",
             )
             request = documentai.ProcessRequest(
-                name=self._processor_name, gcs_document=gcs_doc,
+                name=self._processor_name,
+                gcs_document=gcs_doc,
+                process_options=process_options,
             )
         else:
             raw_doc = documentai.RawDocument(
                 content=raw_pdf_bytes, mime_type="application/pdf",
             )
             request = documentai.ProcessRequest(
-                name=self._processor_name, raw_document=raw_doc,
+                name=self._processor_name,
+                raw_document=raw_doc,
+                process_options=process_options,
             )
 
         def _do_process() -> Any:
@@ -184,6 +231,68 @@ class DocAIParser:
         raw_json = _json.dumps(raw_dict, indent=2, default=str)
         # Defensive: confirm the string round-trips before persisting.
         _json.loads(raw_json)
+
+        # ----- Diagnostic: did the server actually return bboxes? ----------
+        # Walks the proto tree directly (bypassing to_dict()) so we know
+        # whether bboxes are missing because the server didn't send them
+        # vs. proto-plus stripping them during serialization.
+        bbox_proto_count, layout_blocks_count = self._count_proto_bboxes(
+            response.document
+        )
+        logger.info(
+            "DocAI bbox diagnostic: %d blocks have bounding_box set on the "
+            "wire (out of %d total). If 0/N, the processor version is "
+            "ignoring process_options.layout_config.return_bounding_boxes.",
+            bbox_proto_count, layout_blocks_count,
+        )
+
+        # ----- Full-fidelity proto dump (artifact: docai_raw_full) ---------
+        # `to_dict()` strips empty / default-valued submessages. To see
+        # exactly what the server sent on the wire (including empty
+        # bounding_box stubs, empty pages, etc.), we also serialize via
+        # google.protobuf.json_format.MessageToJson with default-field
+        # inclusion enabled. This is the artifact to inspect when the
+        # standard docai_raw.json looks suspicious.
+        full_json = self._document_to_full_json(response.document)
+        await self._persistence.write_artifact(
+            doc_id=doc_id, kind="docai_raw_full", content=full_json,
+        )
+
+        # ----- Raw proto bytes dump (artifact: docai_raw_proto.pb) ---------
+        # If even MessageToJson omits something, this is the bytes the
+        # server literally sent. Inspect with:
+        #   python -c "from google.cloud import documentai_v1 as d; \
+        #              doc = d.Document.deserialize(open('docai_raw_proto.pb','rb').read()); \
+        #              print(doc)"
+        try:
+            proto_bytes = type(response.document).serialize(response.document)
+            await self._persistence.write_artifact(
+                doc_id=doc_id,
+                kind="docai_raw_proto",
+                content=proto_bytes,
+                ext="pb",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not write docai_raw_proto bytes dump: %s", exc,
+            )
+
+        # ----- Proto-text repr dump (artifact: docai_raw_text.txt) ---------
+        # Human-readable proto text. Lets you grep the response with
+        # `grep bounding_box docai_raw_text.txt` to spot bboxes in-place
+        # without any JSON-serializer in the middle.
+        try:
+            proto_text = str(response.document)
+            await self._persistence.write_artifact(
+                doc_id=doc_id,
+                kind="docai_raw_text",
+                content=proto_text,
+                ext="txt",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not write docai_raw_text dump: %s", exc,
+            )
 
         raw_uri = await self._persistence.write_artifact(
             doc_id=doc_id, kind="docai_raw", content=raw_json
@@ -227,29 +336,35 @@ class DocAIParser:
 
         if list(getattr(document, "pages", []) or []):
             # Legacy path: per-page metadata IS present in document.pages.
+            # (Not used by Layout Parser v1.6+ — document.pages is empty there.)
+            # block_spans left empty: the deterministic NER mapper falls back
+            # to page-level attribution if spans are absent.
             for page in document.pages:
                 page_number = int(page.page_number) if page.page_number else 1
                 page_text = self._extract_page_text(document.text or "", page)
                 pages.append(PageText(
-                    page_number=page_number, text=page_text, block_ids_on_page=[],
+                    page_number=page_number, text=page_text,
+                    block_ids_on_page=[], block_spans=[],
                 ))
                 per_page_block_ids[page_number] = []
         else:
             # New path (Layout Parser v1.6+): synthesize pages from blocks.
+            # 2C: build the concatenated page text AND record each block's
+            # [start, end) char span via the shared helper, so the Medical
+            # NER stage can map an entity's offset back to its source block.
             seen_page_numbers: list[int] = []
             for b in blocks:
                 pnum = b.get("page_number") or 1
                 if pnum not in seen_page_numbers:
                     seen_page_numbers.append(pnum)
-                per_page_block_ids.setdefault(pnum, []).append(b["block_id"])
             for pnum in sorted(seen_page_numbers):
-                page_text = "\n".join(
-                    (b.get("text") or "").strip()
-                    for b in blocks
-                    if (b.get("page_number") or 1) == pnum and (b.get("text") or "").strip()
-                )
+                blocks_on_page = [
+                    b for b in blocks if (b.get("page_number") or 1) == pnum
+                ]
+                page_text, spans = concat_blocks_with_spans(blocks_on_page)
                 pages.append(PageText(
-                    page_number=pnum, text=page_text, block_ids_on_page=[],
+                    page_number=pnum, text=page_text,
+                    block_ids_on_page=[], block_spans=spans,
                 ))
 
         # Bind block_id → page mapping into each PageText (may already be
@@ -269,6 +384,91 @@ class DocAIParser:
             raw_docai_gcs_uri=raw_uri,
             fax_header_blocks_removed=0,  # filled later by FaxHeaderFilter
         )
+
+    @staticmethod
+    def _count_proto_bboxes(document: Any) -> tuple[int, int]:
+        """Walk the raw proto tree counting how many DocumentLayoutBlocks
+        carry a populated bounding_box. This bypasses to_dict() so we know
+        whether bboxes are missing because the server didn't send them
+        vs. the serializer dropping them."""
+        layout = getattr(document, "document_layout", None)
+        if not layout or not getattr(layout, "blocks", None):
+            return 0, 0
+
+        with_bbox = 0
+        total = 0
+
+        def _walk(blocks: Any) -> None:
+            nonlocal with_bbox, total
+            for b in blocks:
+                total += 1
+                bp = getattr(b, "bounding_box", None)
+                if bp:
+                    verts = list(getattr(bp, "normalized_vertices", []) or []) \
+                        or list(getattr(bp, "vertices", []) or [])
+                    if verts:
+                        with_bbox += 1
+                tb = getattr(b, "text_block", None)
+                if tb and getattr(tb, "blocks", None):
+                    _walk(tb.blocks)
+                tab = getattr(b, "table_block", None)
+                if tab:
+                    rows = list(getattr(tab, "header_rows", []) or []) \
+                        + list(getattr(tab, "body_rows", []) or [])
+                    for r in rows:
+                        for cell in (r.cells or []):
+                            _walk(cell.blocks or [])
+
+        _walk(layout.blocks)
+        return with_bbox, total
+
+    @staticmethod
+    def _document_to_full_json(document: Any) -> str:
+        """Full-fidelity JSON dump that INCLUDES default-valued fields.
+
+        proto-plus `to_dict()` skips empty submessages — so an unpopulated
+        `bounding_box` simply vanishes from the artifact, making it
+        impossible to tell whether the server omitted it or our serializer
+        dropped it. This helper goes through google.protobuf.json_format
+        with `including_default_value_fields=True` (proto API name varies
+        slightly across versions) to keep every field present.
+
+        Output is also indented for human inspection. JSON-validates before
+        returning.
+        """
+        import json as _json
+
+        try:
+            from google.protobuf.json_format import MessageToJson
+            pb = document._pb if hasattr(document, "_pb") else document
+
+            # google.protobuf renamed the kwarg in 5.x.
+            # Try the new name first, then the old.
+            try:
+                full = MessageToJson(
+                    pb,
+                    indent=2,
+                    preserving_proto_field_name=True,
+                    always_print_fields_with_no_presence=True,
+                )
+            except TypeError:
+                full = MessageToJson(
+                    pb,
+                    indent=2,
+                    preserving_proto_field_name=True,
+                    including_default_value_fields=True,
+                )
+            _json.loads(full)  # round-trip check
+            return full
+        except Exception as exc:
+            logger.warning(
+                "Could not produce full-fidelity DocAI JSON dump (%s) — "
+                "falling back to standard to_dict() output.", exc,
+            )
+            return _json.dumps(
+                DocAIParser._document_to_jsonable_dict(document),
+                indent=2, default=str,
+            )
 
     @staticmethod
     def _document_to_jsonable_dict(document: Any) -> dict[str, Any]:
@@ -388,22 +588,27 @@ class DocAIParser:
 
     @staticmethod
     def _extract_bbox(block: Any) -> list[float]:
-        """Return [x0, y0, x1, y1] from the block's bounding poly. Falls back
-        to [] if the block has no spatial info."""
-        layout = (
-            getattr(getattr(block, "text_block", None), "layout", None)
-            or getattr(getattr(block, "table_block", None), "layout", None)
-            or getattr(getattr(block, "list_block", None), "layout", None)
-            or getattr(getattr(block, "image_block", None), "layout", None)
-        )
-        if not layout or not getattr(layout, "bounding_poly", None):
+        """Return [x0, y0, x1, y1] from the block's bounding poly.
+
+        DocAI Layout Parser puts the bounding poly directly on the
+        DocumentLayoutBlock (`block.bounding_box`), NOT under
+        `text_block.layout.bounding_poly`. It is only populated when the
+        ProcessRequest enabled `process_options.layout_config
+        .return_bounding_boxes = True` (see `parse()` above).
+
+        Falls back to [] if the block has no spatial info.
+        """
+        poly = getattr(block, "bounding_box", None)
+        if not poly:
             return []
-        poly = layout.bounding_poly
-        verts = getattr(poly, "normalized_vertices", []) or getattr(poly, "vertices", [])
+        verts = (
+            list(getattr(poly, "normalized_vertices", []) or [])
+            or list(getattr(poly, "vertices", []) or [])
+        )
         if not verts:
             return []
-        xs = [float(v.x or 0) for v in verts]
-        ys = [float(v.y or 0) for v in verts]
+        xs = [float(getattr(v, "x", 0) or 0) for v in verts]
+        ys = [float(getattr(v, "y", 0) or 0) for v in verts]
         return [min(xs), min(ys), max(xs), max(ys)]
 
     def _fallback_blocks_from_pages(self, document: Any) -> list[BlockInfo]:

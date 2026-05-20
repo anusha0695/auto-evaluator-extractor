@@ -51,6 +51,11 @@
         "Practice_ZIP_4digit"
       ],
       "properties": {
+        "provenance": {
+          "type": "object",
+          "extraction_mode": "DERIVED",
+          "description": "Optional map of field_name → provenance entry. One entry per emitted field. Each value is a small object with: block_id (string|null — cite a DocAI block_id from a recent tool result), page (integer|null), type (one of 'verbatim' | 'inferred' | 'derived' | 'absent'), and optional rationale (string, recommended when type='inferred'). Powers the UI's block-centric explorer view — every field traces back to its source region on the page."
+        },
         "total_pages":            { "type": "integer", "minimum": 1, "extraction_mode": "DERIVED",  "description": "Number of pages in the source PDF (from page count, not from report text)." },
         "report_title":           { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Report title / report header banner literally as printed." },
         "llm_confidence_score":   { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED", "description": "Model self-reported confidence for this section, 0.0-1.0." },

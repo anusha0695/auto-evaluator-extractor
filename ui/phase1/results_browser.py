@@ -32,21 +32,35 @@ def render() -> RunSummary | None:
         )
         return None
 
-    # Build short labels for the radio.
-    labels: list[str] = []
+    # Collapse to ONE entry per document (latest run wins). Artifacts are
+    # stored per-doc and overwritten each run, so the views always show the
+    # latest state of a doc — listing every historical run row would be
+    # misleading (selecting an older run can't load its overwritten
+    # artifacts). `runs` is already most-recent-first.
+    latest_by_doc: dict[str, RunSummary] = {}
+    run_counts: dict[str, int] = {}
     for r in runs:
+        run_counts[r.doc_id] = run_counts.get(r.doc_id, 0) + 1
+        if r.doc_id not in latest_by_doc:
+            latest_by_doc[r.doc_id] = r
+    docs = list(latest_by_doc.values())
+
+    labels: list[str] = []
+    for r in docs:
         badge = _VERDICT_BADGE.get(r.verdict or "", "⚪")
         ts = (r.completed_at or "")[:19].replace("T", " ")
-        labels.append(f"{badge}  **{r.doc_id}**  · {ts}")
+        n = run_counts.get(r.doc_id, 1)
+        runs_note = f" · {n} runs" if n > 1 else ""
+        labels.append(f"{badge}  **{r.doc_id}**  · {ts}{runs_note}")
 
     selected_idx = st.sidebar.radio(
-        f"{len(runs)} run(s):",
-        options=range(len(runs)),
+        f"{len(docs)} document(s):",
+        options=range(len(docs)),
         format_func=lambda i: labels[i],
         label_visibility="visible",
         index=0,
     )
-    return runs[selected_idx]
+    return docs[selected_idx]
 
 
 @st.cache_data(ttl=10)

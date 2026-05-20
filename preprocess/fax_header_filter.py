@@ -38,6 +38,7 @@ from dataclasses import dataclass
 
 from core.observability import trace
 from core.state import BlockInfo, PageText
+from preprocess.docai_parser import concat_blocks_with_spans
 
 logger = logging.getLogger(__name__)
 
@@ -141,13 +142,25 @@ class FaxHeaderFilter:
         for b in blocks:
             blocks_by_page.setdefault(b.get("page_number") or 1, []).append(b)
 
+        # ----- Pass 1: identify fax-noise blocks across the whole doc -----
+        for block in blocks:
+            btext = block.get("text", "") or ""
+            if btext.strip() and self._block_text_is_fax_noise(btext):
+                fax_noise_block_ids.add(block.get("block_id", ""))
+
+        # ----- Pass 2: rebuild each page's text + block_spans from the
+        # SURVIVING (non-fax) blocks. Block-level exclusion keeps the spans
+        # valid against the exact cleaned text SciSpaCy will run on (2C). -----
         for p in pages:
             page_number = p.get("page_number") or 1
-            text = p.get("text", "") or ""
-            cleaned_text, removed_spans = self._strip_fax_noise(text)
-
-            modified = bool(removed_spans)
-            if modified:
+            blocks_on_page = blocks_by_page.get(page_number, [])
+            had_noise = any(
+                b.get("block_id") in fax_noise_block_ids for b in blocks_on_page
+            )
+            cleaned_text, spans = concat_blocks_with_spans(
+                blocks_on_page, exclude_block_ids=fax_noise_block_ids,
+            )
+            if had_noise:
                 pages_modified += 1
 
             cleaned_pages.append(
@@ -155,16 +168,9 @@ class FaxHeaderFilter:
                     page_number=page_number,
                     text=cleaned_text,
                     block_ids_on_page=list(p.get("block_ids_on_page", []) or []),
+                    block_spans=spans,
                 )
             )
-
-            # Tag any block whose text intersects a stripped span.
-            for block in blocks_by_page.get(page_number, []):
-                btext = block.get("text", "") or ""
-                if not btext.strip():
-                    continue
-                if self._block_text_is_fax_noise(btext):
-                    fax_noise_block_ids.add(block.get("block_id", ""))
 
         logger.info(
             "FaxHeaderFilter: pages_modified=%d, blocks_flagged=%d",

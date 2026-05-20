@@ -120,7 +120,11 @@ score:  ## Score an extraction against ground_truth — usage: make score DOC=de
 	fi
 
 ui:  ## Launch the Streamlit results browser — usage: make ui PHASE=1
-	$(STREAMLIT) run ui/phase$(PHASE)/app.py
+	$(STREAMLIT) run ui/phase$(PHASE)/app.py \
+	  --browser.gatherUsageStats=false \
+	  --server.headless=true \
+	  --server.port=8501 \
+	  --server.runOnSave=true
 
 snapshot:  ## Snapshot a phase to snapshots/phaseN/ — usage: make snapshot PHASE=1
 	$(PY) scripts/snapshot_phase.py --phase $(PHASE)
