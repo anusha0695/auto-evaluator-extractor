@@ -207,6 +207,23 @@ def make_preprocess_node(deps: PreprocessNodeDependencies):
                 ),
             )
 
+            # Bundle the source PDF into the doc's artifact folder so the UI
+            # is self-contained (artifacts/<doc_id>/source.pdf). LOCAL backend
+            # only + only when we have the raw bytes (local-pdf runs): we must
+            # not auto-copy PHI into the GCS artifacts bucket — for prod the
+            # source already lives at its gcs_uri.
+            if raw_bytes and getattr(deps.persistence, "backend", "local") == "local":
+                try:
+                    await deps.persistence.write_artifact(
+                        doc_id, "source", raw_bytes, ext="pdf",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "preprocess_node: could not persist source.pdf for "
+                        "doc_id=%s (%s) — UI will fall back to folder search.",
+                        doc_id, exc,
+                    )
+
         latency_ms = int((time.monotonic() - t0) * 1000)
         logger.info(
             "preprocess_node: doc_id=%s complete in %dms "

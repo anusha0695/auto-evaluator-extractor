@@ -152,8 +152,24 @@ def build_block_views(doc_id: str) -> list[BlockView]:
 
 
 def find_source_pdf(doc_id: str) -> Path | None:
-    """Locate the source PDF for a doc. Checks the actual_docs folder and the
-    session uploads dir."""
+    """Locate the source PDF for a doc.
+
+    Preferred: the self-contained copy bundled into the doc's artifact folder
+    (artifacts/<doc_id>/source.pdf) written by preprocess_node on local runs.
+    Falls back to the filename-based folder search for docs processed before
+    that change (or run against gcs_uri input).
+    """
+    # 1. Self-contained artifact copy (cleanest — no filename guessing).
+    try:
+        from core.persistence import load_storage_config
+        local_dir = load_storage_config("phase_1").local_dir_resolved
+        bundled = local_dir / "artifacts" / doc_id / "source.pdf"
+        if bundled.exists():
+            return bundled
+    except Exception:
+        pass
+
+    # 2. Fallback: filename-based search in known input folders.
     repo_root = Path(__file__).resolve().parents[2]
     candidates = [
         repo_root.parent / "data" / "actual_docs" / f"{doc_id}.pdf",
