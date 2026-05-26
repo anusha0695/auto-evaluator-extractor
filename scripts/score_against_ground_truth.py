@@ -3,11 +3,11 @@
 score_against_ground_truth.py — diff a pipeline extraction against the
 matching `ground_truth/*.json` and report per-field pass/fail.
 
-Phase 1 scope: only the `report_metadata` umbrella is scored. The other 3
-umbrellas (`Genomic_Variant_umbrella`, `other_molecular_biomarker_umbrella`,
-`tested_biomarker_umbrella`) are checked for shape (must exist as empty
-placeholders in Phase 1) but not for content. Phase 2 expands scoring to
-all 4 umbrellas once they have hand-labelled ground truth.
+Phase 1 scored only `report_metadata`. Phase 2 scores all v3 sections:
+`report_metadata`, `other_molecular_biomarker_umbrella` (THE biomarker umbrella
+— v3 merge folded sequence variants in here as findings with a nested
+`variant_detail`), `tested_biomarker_umbrella`, `significant_findings`, and
+`clinical_information`.
 
 Per-field comparison policy (highest precedence first):
 
@@ -74,6 +74,16 @@ EXCLUDED_FIELDS = {
     "llm_confidence_score",   # model self-report
     "provenance",              # per-field source citations (Option B); UI consumes it
 }
+
+# Long free-text / narrative fields: exact match is unfair (any truncation or
+# whitespace diff fails). Scored by OVERLAP — pass if one normalized string
+# contains the other OR token-Jaccard ≥ NARRATIVE_OVERLAP_MIN.
+NARRATIVE_FIELDS = {
+    "clinical_significance", "interpretation", "reason_for_study",
+    "clinical_finding_details", "gross_description", "microscopic_description",
+    "text", "details",
+}
+NARRATIVE_OVERLAP_MIN = 0.6
 
 # Fields where strict equality is required (no normalization).
 STRICT_FIELDS = {
@@ -195,6 +205,20 @@ def _compare_field(name: str, expected: Any, actual: Any) -> FieldComparison:
             notes=f"date mismatch (expected_iso={exp_iso}, actual_iso={act_iso})",
         )
 
+    # Narrative / long-text → overlap match (containment or token-Jaccard)
+    if name in NARRATIVE_FIELDS and isinstance(expected, str) and isinstance(actual, str):
+        e, a = _normalize_string(expected), _normalize_string(actual)
+        if e == a or e in a or a in e:
+            return FieldComparison(name, expected, actual, True, "narrative_contains",
+                                   notes="one narrative string contains the other")
+        te, ta = set(e.split()), set(a.split())
+        jac = len(te & ta) / len(te | ta) if (te | ta) else 0.0
+        if jac >= NARRATIVE_OVERLAP_MIN:
+            return FieldComparison(name, expected, actual, True, "narrative_overlap",
+                                   notes=f"token overlap {jac:.2f} ≥ {NARRATIVE_OVERLAP_MIN}")
+        return FieldComparison(name, expected, actual, False, "fail",
+                               notes=f"narrative overlap {jac:.2f} < {NARRATIVE_OVERLAP_MIN}")
+
     # Strings → normalized compare
     if isinstance(expected, str) and isinstance(actual, str):
         if _normalize_string(expected) == _normalize_string(actual):
@@ -234,16 +258,259 @@ def score_report_metadata(
         cmp = _compare_field(field_name, expected[field_name], actual.get(field_name))
         report.comparisons.append(cmp)
 
-    # Catch any extra fields the extractor emitted that aren't in ground truth.
-    for field_name in actual:
-        if field_name in EXCLUDED_FIELDS or field_name in expected:
-            continue
-        report.comparisons.append(FieldComparison(
-            field_name, None, actual[field_name], False, "fail",
-            notes="extra field — not in ground truth",
-        ))
+    # NOTE: we do NOT penalize "extra" fields the extractor emitted that aren't
+    # in the ground truth. `report_metadata` is validated with
+    # additionalProperties:false, so the model CANNOT emit a hallucinated key —
+    # any extra field is a valid (newer) schema field the GT simply hasn't been
+    # labelled for yet. Penalizing it would regress every fixture each time the
+    # schema grows (e.g. the production-parity Accession_Number / Report_Type
+    # additions). Hallucinated keys are caught by the schema validator, not here.
 
     return report
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — multi-section scoring (set / array / object), shape-tolerant
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SectionScore:
+    """One section's score. For object sections, P/R mirror field pass-rate;
+    for array/set sections, P/R are item-level."""
+    section: str
+    kind: str                       # "object" | "array" | "set"
+    precision: float = 0.0
+    recall: float = 0.0
+    f1: float = 0.0
+    expected_count: int = 0
+    actual_count: int = 0
+    matched: int = 0
+    field_pass_rate: float | None = None   # mean field accuracy over matched items
+    notes: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        d = {
+            "section": self.section, "kind": self.kind,
+            "precision": round(self.precision, 4), "recall": round(self.recall, 4),
+            "f1": round(self.f1, 4), "expected_count": self.expected_count,
+            "actual_count": self.actual_count, "matched": self.matched, "notes": self.notes,
+        }
+        if self.field_pass_rate is not None:
+            d["field_pass_rate"] = round(self.field_pass_rate, 4)
+        return d
+
+
+def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
+    p = tp / (tp + fp) if (tp + fp) else (1.0 if fn == 0 else 0.0)
+    r = tp / (tp + fn) if (tp + fn) else (1.0 if fp == 0 else 0.0)
+    f = 2 * p * r / (p + r) if (p + r) else 0.0
+    return p, r, f
+
+
+def _gene_key(symbol: Any) -> str:
+    """HGNC-normalized lowercase key for matching genes (alias-tolerant)."""
+    s = (symbol or "")
+    if not isinstance(s, str) or not s.strip():
+        return ""
+    try:
+        from preprocess.hgnc_resolver import hgnc_normalize
+        canon = hgnc_normalize(s).get("canonical")
+        if canon:
+            return canon.lower()
+    except Exception:
+        pass
+    return _normalize_string(s)
+
+
+def score_set_section(section: str, expected: list[Any], actual: list[Any], *, gene_keyed: bool) -> SectionScore:
+    """Set-membership P/R (e.g. tested_biomarkers panel)."""
+    keyfn = _gene_key if gene_keyed else (lambda x: _normalize_string(x) if isinstance(x, str) else str(x))
+    exp = {keyfn(x) for x in (expected or []) if keyfn(x)}
+    act = {keyfn(x) for x in (actual or []) if keyfn(x)}
+    tp = len(exp & act); fp = len(act - exp); fn = len(exp - act)
+    p, r, f = _prf(tp, fp, fn)
+    return SectionScore(section, "set", p, r, f, len(exp), len(act), tp,
+                        notes=f"tp={tp} fp={fp} fn={fn}")
+
+
+def score_object_array(
+    section: str, expected: list[dict], actual: list[dict], *,
+    key_fields: list[str], score_fields: list[str], gene_field: str | None = None,
+) -> SectionScore:
+    """Identity-match array items by key, then field-accuracy over matched pairs.
+    Item-level P/R from matches; unmatched expected = FN, unmatched actual = FP."""
+    def item_key(it: dict) -> tuple:
+        parts = []
+        for kf in key_fields:
+            v = it.get(kf)
+            if gene_field and kf == gene_field:
+                parts.append(_gene_key(v))
+            else:
+                parts.append(_normalize_string(v) if isinstance(v, str) else v)
+        return tuple(parts)
+
+    exp_by = {item_key(x): x for x in (expected or [])}
+    act_by = {item_key(x): x for x in (actual or [])}
+    matched_keys = set(exp_by) & set(act_by)
+    tp, fp, fn = len(matched_keys), len(set(act_by) - set(exp_by)), len(set(exp_by) - set(act_by))
+    p, r, f = _prf(tp, fp, fn)
+
+    # field accuracy over matched items
+    field_total = field_pass = 0
+    for k in matched_keys:
+        e, a = exp_by[k], act_by[k]
+        for fld in score_fields:
+            if fld in EXCLUDED_FIELDS:
+                continue
+            field_total += 1
+            if _compare_field(fld, e.get(fld), a.get(fld)).passed:
+                field_pass += 1
+    fpr = (field_pass / field_total) if field_total else None
+    return SectionScore(section, "array", p, r, f, len(exp_by), len(act_by), tp,
+                        field_pass_rate=fpr, notes=f"tp={tp} fp={fp} fn={fn}")
+
+
+def score_object_section(section: str, expected: dict, actual: dict, *, fields: list[str]) -> SectionScore:
+    """Field-by-field object scoring (e.g. clinical_information scalars)."""
+    total = passed = 0
+    for fld in fields:
+        if fld in EXCLUDED_FIELDS:
+            continue
+        total += 1
+        if _compare_field(fld, expected.get(fld), actual.get(fld)).passed:
+            passed += 1
+    rate = (passed / total) if total else 1.0
+    return SectionScore(section, "object", rate, rate, rate, total, total, passed,
+                        field_pass_rate=rate, notes=f"{passed}/{total} fields")
+
+
+# v3 merge: variants are biomarker findings with a nested variant_detail.
+# These detail fields are flattened onto the finding row and scored alongside
+# result/interpretation (both-null counts as a match, so IHC findings with no
+# variant_detail aren't penalized).
+_VARIANT_DETAIL_FIELDS = [
+    "variant_allele_frequency", "coding_dna_change", "amino_acid_change",
+    "clinical_significance", "genomic_source_class", "exon",
+]
+
+
+def score_all_sections(doc_id: str, gt_env: dict[str, Any], ex_env: dict[str, Any]) -> list[SectionScore]:
+    """Score every section that has non-empty ground truth. v2/v3 shape-tolerant:
+    other_molecular flat (v2 gt) vs findings[] (v3 output) is reconciled by name."""
+    scores: list[SectionScore] = []
+
+    # report_metadata (reuse the field scorer for parity with Phase 1)
+    gt_md, ex_md = gt_env.get("report_metadata"), ex_env.get("report_metadata")
+    if isinstance(gt_md, dict):
+        rep = score_report_metadata(doc_id=doc_id, expected=gt_md, actual=ex_md or {})
+        scores.append(SectionScore(
+            "report_metadata", "object", rep.pass_rate, rep.pass_rate, rep.pass_rate,
+            rep.total, rep.total, rep.passed, field_pass_rate=rep.pass_rate,
+            notes=f"{rep.passed}/{rep.total} fields"))
+
+    # tested_biomarker_umbrella (set)
+    gt_t = (gt_env.get("tested_biomarker_umbrella") or {}).get("tested_biomarkers")
+    if gt_t:
+        ex_t = (ex_env.get("tested_biomarker_umbrella") or {}).get("tested_biomarkers") or []
+        scores.append(score_set_section("tested_biomarker_umbrella", gt_t, ex_t, gene_keyed=True))
+
+    # other_molecular_biomarker_umbrella — flatten v3 findings[] to (name,result) pairs
+    gt_b = (gt_env.get("other_molecular_biomarker_umbrella") or {}).get("other_molecular_biomarkers")
+    if gt_b:
+        ex_b = (ex_env.get("other_molecular_biomarker_umbrella") or {}).get("other_molecular_biomarkers") or []
+        scores.append(score_object_array(
+            "other_molecular_biomarker_umbrella",
+            _flatten_biomarkers(gt_b), _flatten_biomarkers(ex_b),
+            key_fields=["biomarker_name", "method"],
+            score_fields=["result", "interpretation", "biomarker_class"] + _VARIANT_DETAIL_FIELDS,
+            # Match biomarker names through the same HGNC alias canonicalizer used
+            # for the gene panel, so synonym pairs (HER2 ≡ HER2/neu ≡ ERBB2,
+            # ER ≡ ESR1, PR ≡ PGR) align without a fixture-specific lookup.
+            gene_field="biomarker_name"))
+
+    # clinical_information (object scalars)
+    gt_c = gt_env.get("clinical_information")
+    if isinstance(gt_c, dict) and any(gt_c.get(k) for k in ("reason_for_study", "clinical_finding_details")):
+        ex_c = ex_env.get("clinical_information") or {}
+        scores.append(score_object_section(
+            "clinical_information", gt_c, ex_c,
+            fields=["reason_for_study", "clinical_finding_details", "number_of_clinical_histories"]))
+
+    # significant_findings (Phase 2b) — match specimens by specimen_id, score
+    # the per-specimen fields (gross/micro narrative, pTNM + staging version,
+    # lymph nodes, histology).
+    gt_sf = (gt_env.get("significant_findings") or {}).get("specimen_findings")
+    if gt_sf:
+        ex_sf = (ex_env.get("significant_findings") or {}).get("specimen_findings") or []
+        scores.append(score_object_array(
+            "significant_findings",
+            [_flatten_specimen(s) for s in gt_sf], [_flatten_specimen(s) for s in ex_sf],
+            key_fields=["specimen_id"], score_fields=_SPECIMEN_SCORE_FIELDS))
+
+    return scores
+
+
+_SPECIMEN_SCORE_FIELDS = [
+    "tissue_type", "laterality", "procedure", "gross_description",
+    "microscopic_description", "histologic", "pTNM_stage",
+    "staging_system_version", "lymph_node_status",
+    "number_of_lymph_nodes_examined", "number_of_lymph_nodes_positive",
+]
+
+
+def _flatten_specimen(sf: dict) -> dict:
+    """Flatten one specimen_findings entry to a comparable record keyed by the
+    (first) specimen_id, pulling the nested scalar/narrative fields up."""
+    sp = (sf.get("specimen") or [{}])[0] if (sf.get("specimen")) else {}
+    pd = sf.get("procedure_details") or {}
+    gd = sf.get("gross_description") or {}
+    md = sf.get("microscopic_description") or {}
+    tn = sf.get("pTNM_staging_details") or {}
+    ln = sf.get("lymph_node_details") or {}
+    hist = " | ".join(sorted(
+        (f.get("finding") or "") for f in (sf.get("histologic_findings") or []) if f.get("finding")))
+    return {
+        "specimen_id": sp.get("specimen_id"),
+        "tissue_type": sp.get("tissue_type"),
+        "laterality": sp.get("laterality"),
+        "procedure": pd.get("procedure"),
+        "gross_description": gd.get("text"),
+        "microscopic_description": md.get("text"),
+        "histologic": hist or None,
+        "pTNM_stage": tn.get("pTNM_stage"),
+        "staging_system_version": tn.get("staging_system_version"),
+        "lymph_node_status": ln.get("lymph_node_status"),
+        "number_of_lymph_nodes_examined": ln.get("number_of_lymph_nodes_examined"),
+        "number_of_lymph_nodes_positive": ln.get("number_of_lymph_nodes_positive"),
+    }
+
+
+def _flatten_biomarkers(items: list[dict]) -> list[dict]:
+    """Normalize a biomarker list to (biomarker_name, method, result, interpretation
+    + variant_detail subfields) rows, accepting both v2 flat shape and v3 nested
+    findings[]. v3 merge: a finding that is a sequence variant carries a nested
+    variant_detail — its fields are lifted onto the row so they score alongside
+    result/interpretation."""
+    def _row(name, cls, f):
+        row = {"biomarker_name": name, "biomarker_class": cls,
+               "method": f.get("method"),
+               "result": f.get("result"), "interpretation": f.get("interpretation")}
+        vd = f.get("variant_detail") or {}
+        for k in _VARIANT_DETAIL_FIELDS:
+            row[k] = vd.get(k) if isinstance(vd, dict) else None
+        return row
+    out: list[dict] = []
+    for bm in (items or []):
+        name = bm.get("biomarker_name")
+        cls = bm.get("biomarker_class")
+        findings = bm.get("findings")
+        if isinstance(findings, list) and findings:                       # v3 nested
+            for f in findings:
+                out.append(_row(name, cls, f))
+        else:                                                              # v2 flat
+            out.append(_row(name, cls, bm))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +561,39 @@ def load_extraction_file(path: str | Path) -> dict[str, Any]:
             "`genomic_pathology_extraction.report_metadata` or as a direct field)."
         )
     return metadata
+
+
+def load_ground_truth_envelope(doc_id: str) -> dict[str, Any]:
+    """Return the FULL ground-truth envelope (all sections), not just metadata."""
+    candidates = [
+        _REPO_ROOT / "ground_truth" / f"{doc_id}.json",
+        _REPO_ROOT / "ground_truth" / "phase1" / f"{doc_id}.json",
+    ]
+    for path in candidates:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            env = data.get("genomic_pathology_extraction", data)
+            logger.info("ground truth envelope loaded from %s", path)
+            return env
+    raise FileNotFoundError(
+        f"No ground truth found for doc_id={doc_id!r}. Tried: "
+        f"{', '.join(str(p) for p in candidates)}"
+    )
+
+
+def load_extraction_envelope_file(path: str | Path) -> dict[str, Any]:
+    """Return the FULL extraction envelope from disk. Accepts: a process_local
+    --json dump (top-level `extraction`), a `{genomic_pathology_extraction:{}}`
+    wrapper, or a bare envelope dict."""
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Extraction file not found: {p}")
+    data = json.loads(p.read_text(encoding="utf-8"))
+    if isinstance(data.get("extraction"), dict):
+        return data["extraction"]
+    if isinstance(data.get("genomic_pathology_extraction"), dict):
+        return data["genomic_pathology_extraction"]
+    return data
 
 
 async def load_extraction_from_bigquery(doc_id: str) -> dict[str, Any]:
@@ -427,6 +727,22 @@ def _truncate(s: str, n: int) -> str:
     return s[: n - 1] + "…"
 
 
+def _print_section_scores(doc_id: str, scores: list[SectionScore]) -> None:
+    """Per-section P/R/F1 table (PHI-safe — counts + rates only, no values)."""
+    print(f"\n{'=' * 78}")
+    print(f"Doc: {doc_id}   Phase 2a multi-section score")
+    print(f"{'=' * 78}")
+    print(f"  {'section':<38} {'kind':<7} {'P':>5} {'R':>5} {'F1':>5}  exp/act/match  fields")
+    print(f"  {'-' * 74}")
+    for s in scores:
+        col = GREEN if s.f1 >= 0.80 else (YELLOW if s.f1 >= 0.60 else RED)
+        fpr = f"{s.field_pass_rate:.2f}" if s.field_pass_rate is not None else "  - "
+        print(f"  {s.section:<38} {s.kind:<7} {col}{s.precision:5.2f} {s.recall:5.2f} "
+              f"{s.f1:5.2f}{RESET}  {s.expected_count:>3}/{s.actual_count:>3}/{s.matched:<3}   {fpr}")
+    if not scores:
+        print(f"  {YELLOW}(no sections with ground truth found){RESET}")
+
+
 # ---------------------------------------------------------------------------
 # argparse + main
 # ---------------------------------------------------------------------------
@@ -467,6 +783,12 @@ def _build_parser() -> argparse.ArgumentParser:
              "(requires GCP auth + extractions_v1 table populated by the pipeline).",
     )
     p.add_argument(
+        "--all-sections", action="store_true",
+        help="Score ALL sections with ground truth (Phase 2a: variants, panel, "
+             "biomarkers, clinical_information) — not just report_metadata. Uses "
+             "--extraction-file as the source (a process_local --json dump works).",
+    )
+    p.add_argument(
         "--threshold", type=float, default=0.80,
         help="Acceptance threshold for pass rate (default: 0.80). "
              "Exits 0 if pass_rate ≥ threshold, else 1.",
@@ -490,7 +812,34 @@ async def _amain(argv: list[str]) -> int:
         stream=sys.stderr,
     )
 
-    # ----- Load ground truth -----
+    # ----- Phase 2a: score ALL sections -----
+    if args.all_sections:
+        try:
+            gt_env = load_ground_truth_envelope(args.doc)
+            if args.extraction_file:
+                ex_env = load_extraction_envelope_file(args.extraction_file)
+            else:
+                print("ERROR: --all-sections requires --extraction-file "
+                      "(e.g. the demo_v2.json from process_local --json).", file=sys.stderr)
+                return 2
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR loading for --all-sections: {exc}", file=sys.stderr)
+            return 2
+        scores = score_all_sections(args.doc, gt_env, ex_env)
+        if args.json_output:
+            print(json.dumps({"doc_id": args.doc, "sections": [s.to_dict() for s in scores]},
+                             indent=2, default=str))
+        else:
+            _print_section_scores(args.doc, scores)
+        agg = (sum(s.f1 for s in scores) / len(scores)) if scores else 0.0
+        ok = agg >= args.threshold
+        if not args.json_output:
+            verdict = f"{GREEN}PASS{RESET}" if ok else f"{RED}FAIL{RESET}"
+            print(f"\n  Aggregate mean-F1: {agg:.3f}   Threshold: {args.threshold:.2f}   "
+                  f"Verdict: {verdict}\n", file=sys.stderr)
+        return 0 if ok else 1
+
+    # ----- Load ground truth (report_metadata-only, Phase 1 path) -----
     try:
         gt = load_ground_truth(args.doc)
     except (FileNotFoundError, ValueError) as exc:

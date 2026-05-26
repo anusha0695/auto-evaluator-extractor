@@ -9,8 +9,12 @@
      fields                     list of {name, type, required, description,
                                           extraction_mode, ...}
      extractor_output           the Extractor's emitted JSON object
-     parser_hypothesis          list of {label, text, page_number, source_model,
-                                          target_umbrella_hint}
+     parser_hypothesis          list of candidates, each:
+                                  {text, target_umbrella, target_field_hint,
+                                   occurrences:[{block_id, page, char_start,
+                                                 char_end, text_role,
+                                                 evidence_excerpt}],
+                                   pages, source_models, confidence, rationale}
      parser_hypothesis_count    int
      coverage_gap_tolerance     float, e.g. 0.10
    ============================================================================= #}
@@ -23,6 +27,13 @@ parser-hypothesis flagged that the Extractor ignored.
 
 You are the recall safety net. The Extractor optimizes for precision; you
 optimize for recall.
+
+**Audit source-coverage, do not just diff the hypothesis.** The parser
+hypothesis is a SciSpaCy seed, not a complete answer key — it misses entities
+in prose, untagged table cells, and unusual wording. So your audit is against
+the **actual document** (read it with your tools), using the hypothesis only as
+one input. A field the hypothesis never mentioned can still be a miss if the
+source plainly states it.
 
 Section description (from the schema):
 > {{ schema_section_description }}
@@ -57,18 +68,32 @@ Walk this list. For each field, ask:
    transcription, wrong entity (e.g. signing pathologist vs ordering
    physician) — flag any of these.
 
-For each parser-hypothesis entity:
-- If its `target_umbrella_hint` matches your section and it doesn't appear in
-  the Extractor's output, decide whether it's a miss or a false-positive from
-  SciSpaCy.
+For each parser-hypothesis candidate:
+- Its `target_umbrella` is the section it was routed to; its `occurrences[]`
+  list every place it appeared (each with `block_id`, `page`, `text_role`,
+  `evidence_excerpt`). If a candidate routed to your section doesn't appear in
+  the Extractor's output, decide whether it's a real miss or a SciSpaCy
+  false-positive — and when it's a miss, cite the `occurrences[0].block_id` and
+  `page` so the SME can click straight to it.
+- **Routing is noisy and multi-homed — judge by THIS section's semantics, not
+  by the seed.** The same surface (e.g. a gene symbol) is routinely routed to
+  several sections at once, so a candidate landing here does not mean it belongs
+  here. Count it as a miss ONLY if the source supports it belonging in
+  **`{{ schema_section_name }}`** as the section description above defines it. If
+  it actually belongs to a sibling umbrella, it is **not** a miss here — drop it
+  from `parser_hypothesis_misses` and from the gap count. Example: a bare gene
+  symbol seeded into the tested-panel section is not a "miss" for the biomarker-
+  findings section if the report never reports a result for it; an assay method
+  (`IHC`, `NGS`) seeded as a biomarker name is not a biomarker miss. Apply the
+  same "does it fit this section's definition" test for every section.
 
 ## Coverage gap signal
 
 Compare:
 - `extracted_non_null_field_count` = number of non-null leaf values in the
   Extractor's output
-- `parser_hypothesis_relevant_count` = number of parser-hypothesis entities
-  whose `target_umbrella_hint` matches this section
+- `parser_hypothesis_relevant_count` = number of parser-hypothesis candidates
+  whose `target_umbrella` matches this section
 
 If `(parser_hypothesis_relevant_count - extracted_non_null_field_count) /
 max(parser_hypothesis_relevant_count, 1) > {{ coverage_gap_tolerance }}`, you
@@ -104,9 +129,10 @@ Emit a single JSON object:
   ],
   "parser_hypothesis_misses": [
     {
-      "candidate_text": "<from parser_hypothesis>",
-      "candidate_label": "<SciSpaCy label>",
-      "candidate_page": <int>,
+      "candidate_text": "<the candidate's `text`>",
+      "candidate_label": "<the candidate's `target_field_hint`, or its `target_umbrella` when no field hint>",
+      "candidate_page": <int — occurrences[0].page>,
+      "candidate_block_id": "<occurrences[0].block_id, or null>",
       "should_have_landed_in": "<schema field>"
     }
   ],

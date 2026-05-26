@@ -25,20 +25,36 @@ from typing import Any, Literal, TypedDict
 
 
 class BlockInfo(TypedDict, total=False):
-    """One DocAI layout block."""
+    """One DocAI layout block.
+
+    M2.5: blocks that came from a DocAI table cell carry table-structure
+    coordinates so the Binder can bind name↔method↔result deterministically by
+    row, and so a spanning header/cell expands across the rows/cols it covers.
+    These are absent (None) for non-table blocks.
+    """
 
     block_id: str
     page_number: int
     bbox: list[float]                 # [x0, y0, x1, y1] in DocAI's normalized space
     section_path: str                 # e.g. "page_1/header/right_column"
     text: str
+    # --- table structure (M2.5; only on table-cell blocks) ----------------
+    table_id: str                     # stable id for the owning table (stitched across pages)
+    row: int                          # 0-based row index within the table (header rows first)
+    col: int                          # 0-based column index
+    row_span: int                     # DocAI cell row_span (default 1)
+    col_span: int                     # DocAI cell col_span (default 1)
+    is_table_header: bool             # True if the cell is in a header row
+    table_continued: bool             # True if this row came from a stitched continuation page
 
 
 UmbrellaHint = Literal[
     "report_metadata",
-    "Genomic_Variant_umbrella",
     "other_molecular_biomarker_umbrella",
     "tested_biomarker_umbrella",
+    # Phase 2 (schema v3):
+    "significant_findings",
+    "clinical_information",
     "none",
 ]
 
@@ -83,6 +99,19 @@ class PageText(TypedDict, total=False):
     block_spans: list[BlockSpan]      # 2C: block_id → [start, end] in `text`
 
 
+class WordBox(TypedDict, total=False):
+    """One OCR token's geometry (P3-M8a). Captured from `document.pages[].tokens`
+    when the response has an OCR layer; powers the SME UI's pixel-tight entity
+    highlight (via `preprocess/word_geometry.word_boxes_for_entity`). Empty when
+    the doc is pure Layout-Parser output → UI falls back to the block box."""
+
+    page: int
+    text: str
+    bbox: list[float]                 # [x0, y0, x1, y1] normalized
+    char_start: int
+    char_end: int
+
+
 class DocProfile(TypedDict, total=False):
     """Aggregated preprocessing output for the doc."""
 
@@ -90,6 +119,7 @@ class DocProfile(TypedDict, total=False):
     pages: list[PageText]
     blocks: list[BlockInfo]
     block_profiles: list[BlockProfile]
+    word_geometry: list[WordBox]      # M8a: OCR token boxes (may be empty)
     raw_docai_gcs_uri: str            # where the raw DocAI response is cached
     fax_header_blocks_removed: int    # count of blocks dropped by fax_header_filter
 
@@ -119,9 +149,10 @@ class ParserHypothesisCandidate(TypedDict, total=False):
     text: str
     target_umbrella: Literal[
         "report_metadata",
-        "Genomic_Variant_umbrella",
         "other_molecular_biomarker_umbrella",
         "tested_biomarker_umbrella",
+        "significant_findings",
+        "clinical_information",
     ]
     target_field_hint: str | None     # schema field name, or None for non-metadata umbrellas
     occurrences: list[Occurrence]     # 1A: every mention site, grouped under this (text, umbrella)
@@ -191,10 +222,48 @@ class PipelineState(TypedDict, total=False):
     # other 3 umbrellas as empty placeholders.
     extraction: dict[str, Any] | None
 
+    # Phase 2 (graph_linear) inter-node channels --------------------------------
+    # CRITICAL: LangGraph's StateGraph(PipelineState) only propagates keys that
+    # are DECLARED here as channels — undeclared keys returned by a node are
+    # dropped before the next node runs. graph_v1 routes its data through the
+    # declared `team_outputs`; graph_linear passes the teams' section outputs to the
+    # Linker (and team/binding verdicts to the decision router + UI) via these,
+    # so they MUST be declared or the Linker sees nothing and emits an empty
+    # envelope.
+    section_outputs: dict[str, Any]          # schema_section → that team's payload
+    team_results: dict[str, Any]             # team_key → {verdict, confidence, needs_review_count}
+    active_team_keys: list[str]              # Planner output
+    planner_rationale: dict[str, str]        # team_key → why active/skipped
+    links: list[dict[str, Any]]              # Linker cross-section links
+    link_needs_review: list[dict[str, Any]]  # Linker escalation refs
+    binding_verifier: dict[str, Any]         # {refuted, uncertain} summary
+    binding_items: list[dict[str, Any]]      # per-verdict {ref, check, verdict, evidence} (trace "why")
+
     # Verification + decision --------------------------------------------------
     verifier_scorecards: list[VerifierScorecard]
-    verdict: Literal["auto_accept", "fixable", "sme_flag"] | None
+    # P3-M4 added "partial_accept" (graph_selfcorrecting router commits clean sections,
+    # escalates the rest). "fixable" is the graph_linear dead branch kept for compat.
+    verdict: Literal["auto_accept", "partial_accept", "fixable", "sme_flag"] | None
     verdict_reason: str | None
+    router_decision: dict[str, Any]          # P3-M4 RouterDecisionV3.to_dict() (accepted/flagged/escalation_items)
+
+    # Phase 3 (graph_selfcorrecting) repair-loop channels ---------------------------------
+    # CRITICAL: LangGraph drops undeclared keys between nodes (the empty-extraction
+    # bug). The triage→repair→linker→verifiers→triage cycle threads these:
+    repair_budget_used: int                  # graph-level ping-backs consumed this doc
+    repair_requests: list[dict[str, Any]]    # triage's selected catalog actions for THIS cycle
+    defect_signatures_seen: list[str]        # "(team, target_ref, defect_type)" — recur-guard
+    block_reads: dict[str, Any]              # memoized recall-floor re-read determinations (present/absent)
+    repair_log: list[dict[str, Any]]         # per-cycle ledger (persisted as repair_log.json)
+    escalation_queue: list[dict[str, Any]]   # record-level items for the SME queue (M8 UI)
+    relink_hints: list[dict[str, Any]]       # gap #3: refuted link refs → re-link adjudicator "avoid/re-evaluate"
+
+    # P3-M7 VMAW deep-resolution outputs ---------------------------------------
+    vmaw_log: list[dict[str, Any]]           # per-item resolution ledger (persisted as vmaw_log.json)
+    vmaw_resolutions: list[dict[str, Any]]   # VMAWResolution dicts (auto_applied / proposed_for_sme / unresolved)
+
+    # P3-M8b per-agent trace (PHI-safe summaries; persisted local-only) --------
+    agent_trace: list[dict[str, Any]]        # AgentTraceRecord dicts across all teams (the "how it got extracted" timeline)
 
     # Persistence + audit ------------------------------------------------------
     artifacts_gcs_prefix: str | None          # gs://.../extraction_outputs/phase1/<doc_id>/

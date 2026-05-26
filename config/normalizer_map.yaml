@@ -1,0 +1,20 @@
+# =============================================================================
+# Normalizer map (gap #2) — leaf field name → normalizer key.
+# =============================================================================
+# Fields whose extracted value has a deterministic CANONICAL form we can safely
+# write back (replacing the field value while the verbatim string stays in the
+# record's occurrences). Only fields whose normalizer yields a display-correct
+# canonical are listed:
+#   • biomarker_name / method → synonym-table canonical
+#   • coding/genomic/amino-acid change → hgvs_validate.normalized
+# Quantities (VAF / size) are deliberately OMITTED: their normalizer returns a
+# comparison numeric (e.g. "12%" → 0.12), not a display value, so auto-writing it
+# back would corrupt the field. They stay validate-only / escalate.
+# =============================================================================
+
+normalizable_fields:
+  biomarker_name: biomarker
+  method: method
+  coding_dna_change: hgvs
+  genomic_dna_change: hgvs
+  amino_acid_change: hgvs

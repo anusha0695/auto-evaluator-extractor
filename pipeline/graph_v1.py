@@ -14,7 +14,7 @@ Linear flow (no conditional edges in Phase 1):
 `document_received` is a tiny entry-point node that validates the seed
 state has `doc_id` + `gcs_uri` + `pipeline_version` set.
 
-The graph is **frozen** after Phase 1 ships. Phase 2 ships `graph_v2.py`
+The graph is **frozen** after Phase 1 ships. Phase 2 ships `graph_linear.py`
 with the Planner + 4 teams + Linking + full verifier suite as a separate
 file. `pipeline/runner.py` dispatches between the two by `--version`.
 

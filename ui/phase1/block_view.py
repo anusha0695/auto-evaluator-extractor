@@ -113,11 +113,11 @@ def build_block_views(doc_id: str) -> list[BlockView]:
                 )
         # Legacy fallback: no occurrences → can't attribute to a block; skip.
 
-    # --- fields per block (from report_metadata.provenance) ---
+    # --- fields per block (from report_metadata.provenance; array OR legacy map) ---
+    from ui.phase1.evidence import iter_provenance
     fields_by_block: dict[str, list[FieldRow]] = {}
     report_md = (extraction.get("report_metadata") or {}) if extraction else {}
-    provenance = report_md.get("provenance") or {}
-    for field_name, prov in provenance.items():
+    for field_name, prov in iter_provenance(report_md.get("provenance")):
         if not isinstance(prov, dict):
             continue
         bid = str(prov.get("block_id") or "")

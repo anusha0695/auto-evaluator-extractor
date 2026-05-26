@@ -1,0 +1,119 @@
+{# =============================================================================
+   SpecimenFindingsTeam — team-specific prompt (Phase 2b).
+
+   Layered on config/prompts/system/extractor.j2 via {% include %}. The base
+   gives the schema-driven field contract (rendered from `significant_findings`
+   in genomic_pathology_v3.json — a deeply nested OBJECT whose `specimen_findings`
+   is an ARRAY), the recall mandate, the object-vs-array note, the ReAct format,
+   the tool list, and the output format. This file adds the multi-specimen
+   surgical-pathology rules.
+
+   Jinja context (same as extractor.j2):
+     team_name = "SpecimenFindingsTeam"
+     schema_section_name = "significant_findings"
+     schema_section_description, fields, available_tools, parser_hypothesis_count
+     pipeline_version
+   ============================================================================= #}
+{% include 'system/extractor.j2' %}
+
+---
+
+# SpecimenFindingsTeam rules — `significant_findings`
+
+This section is the **surgical-pathology narrative**. Emit the object with
+`count_of_specimen_findings` (= length of `specimen_findings`),
+`llm_confidence_score`, and `specimen_findings` (one object per specimen).
+Your **exclusive source** is the part of the report explicitly labelled "Final
+Diagnosis", "Pathologic Diagnosis", "Diagnosis", "Synoptic Report",
+"Gross Description", "Microscopic Description", "Opinion", or "Impression".
+
+If this report has NO surgical-pathology content (e.g. a molecular/PCR assay,
+a blood test) emit an **empty** `specimen_findings: []` with
+`count_of_specimen_findings: 0`. Do not invent specimens.
+
+## 1. Specimen identification — one entry per specimen (or one aggregated)
+
+- If the report has **multiple labelled specimens** (A, B, C / 1, 2, 3), create
+  one `specimen_findings` entry per specimen and map each finding to the right
+  one by its identifier.
+- If specimens exist but the findings are **aggregated and cannot be separated**,
+  create **one** entry whose `specimen[]` lists all the specimens.
+- For each specimen in `specimen[]`: `specimen_id` ("A"), `tissue_type`
+  ("Breast", "Lymph Node"), `description`, `tissue_site` ("RIGHT BREAST
+  RETROAREOLAR (MRI-GUIDED CORE BIOPSY)"), `laterality` (Right/Left/Bilateral).
+- **`laterality` is per-specimen — derive it from THIS specimen's own
+  site/description, never copy it from a sibling specimen.** Each specimen
+  carries its own side: a right-breast biopsy is `Right`, a left-axilla node is
+  `Left`. If a specimen's own text states no side, emit `null` rather than
+  inheriting another specimen's laterality.
+
+## 2. Per-specimen detail (map to the CORRECT specimen)
+
+- `procedure_details`: `procedure` ("Core Biopsy", "Excisional Biopsy",
+  "Resection"), `specimen_count` (integer or null).
+- `gross_description.text`: the entire gross description for THIS specimen. If
+  the gross section is labelled per-specimen (A) … B) …), map A's text to
+  specimen A.
+- `microscopic_description.text`: the microscopic / diagnosis text for THIS
+  specimen (may live under Final Diagnosis / Diagnosis / Opinion / Impression).
+- `histologic_findings[]`: one object per conclusive histologic diagnosis —
+  `finding` ("Invasive Ductal Carcinoma"), `interpretation` (or null).
+- `ancillary_studies_findings[]`: high-level summary of ancillary tests (IHC,
+  FISH, NGS) — `ancillary_finding`, `interpretation`. NOTE: detailed biomarker
+  results still belong in the biomarker umbrellas; here keep it summary-level.
+- `morphology_findings`: `nuclear_grade`, `growth_pattern`, `size`, `necrosis`,
+  `calcifications`, `tumor_extent` (each VERBATIM or null).
+
+## 3. pTNM staging — capture the version, it is CRITICAL
+
+- `pTNM_staging_details.pTNM_stage`: the full alphanumeric AJCC string (T, N, M
+  components — assemble if split across lines, e.g. "pT2 pN1a M0").
+- `pTNM_staging_details.staging_system_version`: **CRITICAL** — scan the text
+  around the TNM scores for the staging authority + edition (e.g. "AJCC 8th
+  Edition", "AJCC Cancer Staging Manual, 8th ed."). Do not leave this null if
+  the report states an edition anywhere near the staging.
+- **Case-level staging applies to every specimen it describes.** A synoptic
+  pTNM stage is usually stated once for the whole case but spans multiple
+  specimens — the `pT` component describes the tumor specimen, the `pN`
+  component the nodal specimen. Record the same `pTNM_stage` +
+  `staging_system_version` on each specimen the stage pertains to (e.g. the
+  primary-tumor specimen AND the regional-node specimen), not only on the first.
+
+## 4. Lymph nodes
+
+- `lymph_node_details`: `lymph_node_status` (Positive/Negative/Tumor present/
+  Benign), `number_of_lymph_nodes_examined` (integer), `number_of_lymph_nodes_positive`
+  (integer — count micrometastases / ITCs if the report counts them as positive),
+  `text` (the nodal-findings block: extranodal extension, deposit size, sentinel
+  vs non-sentinel). Look in "Synoptic Report" / "Regional Lymph Nodes".
+
+## 5. page_number + llm_confidence_score
+
+Per-object `page_number` is DERIVED (where that content sits). Emit a top-level
+`llm_confidence_score` in [0.0, 1.0] for the section.
+
+---
+
+## Per-field rationale (`provenance`) — ALWAYS emit, as an ARRAY
+
+Emit a `provenance` **array** on each `specimen_findings` record — ONE entry per
+field you populated in THAT record. Each entry is
+`{field_name, block_id, page, type, rationale}` where `field_name` is the populated
+field, `type` is one of `verbatim` | `inferred` | `derived` | `absent`, and
+`rationale` is ONE short clause saying WHY you chose that value (required when
+`type` is `inferred`/`derived`). This is the per-field "why" the SME reviewer reads —
+emit it for EVERY field you populated, keep it brief, ground it in a cited block,
+and never restate PHI beyond the value itself. Use an ARRAY (not a keyed object).
+
+```json
+"provenance": [
+  { "field_name": "tissue_type", "block_id": "b12", "page": 1, "type": "verbatim",
+    "rationale": "specimen header reads 'Breast, left, core biopsy'" },
+  { "field_name": "pTNM_stage", "block_id": "b30", "page": 2, "type": "inferred",
+    "rationale": "stage assembled from the synoptic T and N rows" }
+]
+```
+
+Now run the ReAct loop and produce the `significant_findings` object — one
+`specimen_findings` entry per specimen, each fully mapped. Emit
+`specimen_findings: []` if there is no surgical-pathology content.

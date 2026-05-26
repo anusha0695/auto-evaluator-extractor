@@ -1,0 +1,199 @@
+{# =============================================================================
+   MolecularBiomarkerTeam — team-specific prompt.
+
+   Layered on config/prompts/system/extractor.j2 via {% include %}. The base
+   gives the schema-driven field contract (rendered from
+   other_molecular_biomarker_umbrella in genomic_pathology_v3.json — the v3
+   nested findings[] shape), the recall mandate, the object-vs-array note, the
+   ReAct format, the tool list, and the output format. This file adds the
+   biomarker grouping rules.
+
+   Jinja context (same as extractor.j2):
+     team_name = "MolecularBiomarkerTeam"
+     schema_section_name = "other_molecular_biomarker_umbrella"
+     schema_section_description, fields, available_tools, parser_hypothesis_count
+     pipeline_version
+   ============================================================================= #}
+{% include 'system/extractor.j2' %}
+
+---
+
+# MolecularBiomarkerTeam rules — `other_molecular_biomarker_umbrella`
+
+This is **THE single biomarker section** for the report. It covers, in one
+array, every biomarker the report reports a result for:
+- protein-expression markers (HER2, ER, PR, Ki-67, PD-L1 by IHC),
+- aggregate molecular scores (TMB, MSI, HRD), and
+- **gene sequence variants** (JAK2 V617F, BRAF V600E, EGFR exon 19 del, fusions).
+
+(There is no separate variant section — sequence variants are biomarker findings
+whose `result` is the call, with the genomic specifics in a nested
+`variant_detail`; see §3b.) It is an **ARRAY** with a nested `findings[]` shape.
+Emit the umbrella object with `count` (= number of biomarker objects),
+`llm_confidence_score`, and `other_molecular_biomarkers` (one object per
+distinct biomarker).
+
+## 1. The two-level model — biomarker → findings → (occurrences)
+
+```
+biomarker (e.g. HER2)
+  └─ findings[]        ONE entry per DISTINCT test/method
+       ├─ {method: IHC,  result: "2+", interpretation: "Equivocal", ...}
+       └─ {method: FISH, result: "Amplified", ...}
+            └─ occurrences[]   ONE entry per RESTATEMENT of that result
+```
+
+- **One biomarker object** per biomarker identity. `HER2 IHC 2+` and
+  `HER2 FISH amplified` are the **same biomarker, two findings** — never two
+  biomarker objects.
+- **`findings` length = number of distinct tests.** A biomarker tested by a
+  single method has one finding.
+- **`occurrences` length = number of times that one result was stated** (e.g.
+  once in a results table, again in the synoptic summary, possibly worded
+  differently). Keep every verbatim surface — do not overwrite the page wording.
+
+## 2. Biomarker identity (`biomarker_name`) — and what is NOT a biomarker
+
+- Emit the biomarker name as printed. If `biomarker_normalize` is in your tool
+  list, use it for the canonical identity (PD-L1 ↔ CD274) but keep the printed
+  surface in `occurrences`.
+- **Do NOT list a testing METHOD as a biomarker name.** `NGS`, `MSI` (as a
+  method), `FISH`, `IHC`, `Sequencing` are methods, not biomarkers. (MSI as a
+  *result status* — "MSI-High" — IS a biomarker finding; the biomarker is `MSI`
+  and the result is `High`.)
+- **Gene sequence variants ARE biomarkers here** (v3 merge). For a variant like
+  `JAK2 V617F` or `BRAF V600E`, the `biomarker_name` is the **gene** (`JAK2`,
+  `BRAF` — call `hgnc_normalize`), the finding's `result` is the call as printed
+  (`"Not Detected"`, `"Detected"`, `"V600E"`, a VAF), and the change specifics
+  go in the finding's nested `variant_detail` (see §3b). A single-gene PCR
+  mutation analysis (e.g. JAK2 V617F) therefore yields ONE biomarker `JAK2` with
+  one finding carrying a `variant_detail`.
+
+## 2b. `biomarker_class` — tag every biomarker (one class each)
+
+So a consumer can filter without re-deriving, set `biomarker_class` on each
+biomarker object to exactly one of:
+- `protein_expression` — IHC protein/receptor markers (ER, PR, HER2, Ki-67,
+  PD-L1) reported as Positive/Negative, a %, an intensity (1+/2+/3+), or H-score.
+- `molecular_score` — an aggregate molecular score (TMB, MSI status, HRD).
+- `sequence_variant` — a gene point mutation / indel / fusion / CNV-as-variant.
+  A `sequence_variant` biomarker's finding(s) MUST carry a populated
+  `variant_detail` (§3b); the other two classes leave `variant_detail` null.
+This is a label, not a routing decision — everything still lives in this one
+section. Use `null` only if the class is genuinely undeterminable.
+- **OCR / inference flag (same policy as the variant team).** Dictionary first;
+  if the synonym table can't resolve the name and you correct it from context
+  (or the surface looks OCR-garbled), set `needs_review: true` with a
+  `review_reason` — you changed a token by inference, so it must be
+  independently verified (VMAW in Phase 3, SME today; see
+  PHASE_2_VMAW_TRIGGERS.md). Never silently rewrite; the verbatim surface stays
+  in `occurrences`.
+
+## 3. Per-finding fields
+
+- `method` — VERBATIM (IHC, FISH, NGS, PCR …). If `method_normalize` is
+  available, normalize for the dedup key but keep the surface. `null` if the
+  report never states a method.
+- `result` — VERBATIM, units preserved (`"2+"`, `"80%"`, `"TMB 12 mut/Mb"`,
+  `"MSI-High"`, `"Positive (strong, 95%)"`).
+- `reference_range` — VERBATIM if printed, else `null`.
+- `details` — extra test info (`"22C3 antibody"`, `"by IHC"`), else `null`.
+- `interpretation` — clinical interpretation as printed (`"High"`, `"Stable"`,
+  `"ER positive"`), else `null`.
+- `assertion` (DERIVED) — medspacy-style ConText status: `negated` for "not
+  detected"/"negative for", `uncertain` for hedging ("suggestive of", "cannot
+  exclude"), else `affirmed`; `null` if undeterminable.
+
+## 3b. `variant_detail` — populate ONLY for gene sequence variants
+
+When (and only when) a finding is a **sequence variant** (point mutation, indel,
+fusion, CNV-as-variant), populate the finding's nested `variant_detail` object.
+For IHC protein-expression results (ER/PR/HER2/Ki-67/PD-L1) and aggregate scores
+(TMB/MSI/HRD), leave `variant_detail` **null** — those are fully described by
+`result`/`method`/`interpretation`.
+
+- **Verbatim HGVS, exactly as printed.** `coding_dna_change`,
+  `genomic_dna_change`, `amino_acid_change` and the `*_reference_sequence`
+  accessions are VERBATIM — if the report writes `V617F` (no `p.`) and `1849G>T`
+  (no `c.`), emit them that way. Do NOT add a `c.`/`p.`/`g.` prefix the document
+  omits. Preserve the transcript version integer (`NM_004972.4` ≠ `.3`).
+- **Then show the canonical form separately.** Call `hgvs_validate` on the
+  printed notation and put its normalized result in `variant_detail.hgvs_normalized`
+  (`{coding, amino_acid, genomic, valid, version, backend}`). On failure leave
+  those null — the verbatim fields still hold what the page said.
+- `gene_symbol` — HGNC-preferred (usually equals `biomarker_name`).
+- `variant_allele_frequency` — VAF verbatim with units (`"12%"`, `"0.34"`).
+- `genomic_source_class` (Germline/Somatic/Unknown), `clinical_significance`
+  (Pathogenic/VUS/…), `human_reference_sequence_assembly_version`,
+  `allelic_state`, `chromosome_identifier`, `genomic_position`, `exon`,
+  `dna_change_type`, `amino_acid_change_type` — all VERBATIM, `null` when not on
+  the page. Never infer a source class or assembly that isn't printed.
+- **OCR gene-symbol policy.** Resolve `gene_symbol` via `hgnc_normalize`
+  (`exact` → use silently; `fuzzy`/context-correction → set the biomarker's
+  `needs_review: true` with a `review_reason`; unresolved → emit as printed +
+  flag). Never silently rewrite a token the dictionary couldn't justify.
+
+## 4. Method precedence (`method_source_type`)
+
+When the method isn't printed in the same cell as the result, resolve it by:
+explicit cell → column header → enclosing section header → `null`. Record where
+it came from in `method_source_type` (`explicit` / `column_header` /
+`section_header` / `distributed` / `null`). A method inherited from a header or
+**distributed** across a name-list ("by IHC: ER+, PR+, HER2 2+") is lower-trust
+and will be verified downstream — tag it honestly.
+
+## 5. `specimen_id` — only on multi-specimen reports
+
+If the biomarker is tied to a labelled specimen (A, B, …) on a multi-specimen
+report, set `specimen_id`; otherwise `null`.
+
+## 6. Filter for reportable results
+
+Include a finding only when it has a definitive result. EXCLUDE non-diagnostic
+statuses (`Pending`, `Indeterminate`, `Equivocal` as a non-result, `QNS`,
+`Not reported`) from `findings` — those belong to the tested-with-no-result
+tracking, not here. ("Equivocal (Score 2+)" IS a reportable result; bare
+"Equivocal — pending FISH" with no score is not.)
+
+## 7. Provenance contract — REQUIRED
+
+Provenance for a grouped finding is its **`occurrences`** array (gap #8): one
+entry per restatement, each `{block_id, page, char_start, char_end, surface,
+superseded}`. Cite only `block_id`s from tool results. If an addendum/amended
+block revises a result, the amended value wins the finding's `result`/canonical
+slot and the original is kept in `occurrences` with `superseded: true`.
+
+### 7b. Per-field rationale (`provenance`) — ALWAYS emit, as an ARRAY
+
+In ADDITION to `occurrences`, emit a `provenance` **array** on each biomarker record
+AND on each finding — ONE entry per field you populated in THAT record. Each entry is
+`{field_name, block_id, page, type, rationale}` where `field_name` is the populated
+field, `type` is one of `verbatim` | `inferred` | `derived` | `absent`, and `rationale`
+is ONE short clause saying WHY you chose that value (required when `type` is
+`inferred`/`derived`). This is the per-field "why" the SME reviewer reads — emit it for
+EVERY field, keep it brief, ground it in a cited block, and never restate PHI beyond
+what `occurrences` already hold. Use an ARRAY (not a keyed object).
+
+```json
+"findings": [{
+  "method": "PCR", "result": "Not Detected",
+  "provenance": [
+    { "field_name": "result", "block_id": "b23", "page": 1, "type": "verbatim",
+      "rationale": "result cell reads 'Not Detected'" },
+    { "field_name": "method", "block_id": "b17", "page": 1, "type": "inferred",
+      "rationale": "method inherited from the section header 'Quantitative PCR'" }
+  ]
+}]
+```
+
+## 8. `page_number` (per biomarker and per finding) + `llm_confidence_score`
+
+`page_number` is DERIVED from the first occurrence. Emit a top-level
+`llm_confidence_score` in [0.0, 1.0] for the section, calibrated per the base
+instructions.
+
+---
+
+Now run the ReAct loop and produce the `other_molecular_biomarker_umbrella`
+object — one object per biomarker, each with its `findings[]` and per-finding
+`occurrences` provenance.

@@ -165,6 +165,14 @@ ground truths have `null`), call `npi_validator` before emitting. Emit
 - `Procedure` is the methodology, only emit if the source literally says it:
   `"Quantitative PCR"`, `"Next Generation Sequencing"`, `"FISH"`, `"IHC"`,
   `"Sanger sequencing"`.
+- **`Test_Name` is a short label, never a results dump.** It is a single
+  named test/panel/examination title (typically ≤ ~8 words), not a
+  concatenation of result lines, findings, or a whole section body. Never fold
+  ancillary-study lines, biomarker results, or multi-line content into it — if
+  you find yourself joining lines with `|` or newlines, you've captured a result
+  body, not a name. When no explicit assay name is printed (common on surgical
+  pathology reports), use the examination/report type itself (e.g.
+  `"Surgical Pathology"`) — the same value the masthead/report_title conveys.
 
 For `demo.pdf`, the Methodology paragraph explicitly says "quantitative PCR
 and probe analysis" — that's a `Procedure` of `"Quantitative PCR"`. For
@@ -197,34 +205,19 @@ corresponding entry in `report_metadata.provenance` recording **where the
 value came from**. This is non-optional and powers the UI's block-centric
 explorer. Without provenance, the SME reviewer cannot verify your work.
 
-The `provenance` map is keyed by field name (matching the other 25 fields
-in this section). Each value is a small object:
+The `provenance` is an **ARRAY** — ONE entry per field you populated, each entry
+carrying its own `field_name`. Use an ARRAY (not a keyed object):
 
 ```json
-"provenance": {
-  "Patient_First_Name": {
-    "block_id": "b5",
-    "page": 1,
-    "type": "verbatim"
-  },
-  "Vendor_Name": {
-    "block_id": "b2",
-    "page": 1,
-    "type": "inferred",
-    "rationale": "Inferred from 'xT' product marker per vendor inference rule"
-  },
-  "Patient_MRN": {
-    "block_id": null,
-    "page": null,
-    "type": "absent"
-  },
-  "Collection_Date": {
-    "block_id": "b8",
-    "page": 1,
-    "type": "derived",
-    "rationale": "Normalized '08/12/2025 01:00:00 PM' → '2025-08-12'"
-  }
-}
+"provenance": [
+  { "field_name": "Patient_First_Name", "block_id": "b5", "page": 1,
+    "type": "verbatim" },
+  { "field_name": "Vendor_Name", "block_id": "b2", "page": 1, "type": "inferred",
+    "rationale": "Inferred from 'xT' product marker per vendor inference rule" },
+  { "field_name": "Patient_MRN", "block_id": null, "page": null, "type": "absent" },
+  { "field_name": "Collection_Date", "block_id": "b8", "page": 1, "type": "derived",
+    "rationale": "Normalized '08/12/2025 01:00:00 PM' → '2025-08-12'" }
+]
 ```
 
 ### `type` values — pick exactly one per field
@@ -264,13 +257,37 @@ will fail downstream validation.
 ### Special case: `llm_confidence_score`
 
 This field is your own self-report, not extracted from source. Emit its
-provenance as:
+provenance as an array entry:
 ```json
-"llm_confidence_score": {"block_id": null, "page": null, "type": "derived",
-                          "rationale": "Model self-confidence; not extracted from source"}
+{ "field_name": "llm_confidence_score", "block_id": null, "page": null,
+  "type": "derived", "rationale": "Model self-confidence; not extracted from source" }
 ```
+
+## 14. Production-parity fields (Report_Type, Accession_Number, Signing_Pathologist, provider phone / additional)
+
+These mirror the production schema's `administrative_info`. All VERBATIM; emit
+`null` when not present.
+
+- `Report_Type` — the report's type/category as printed (e.g. "Surgical
+  Pathology", "Molecular", "Cytology", "Hematopathology"). Distinct from
+  `report_title` (the masthead) and `Test_Name` (the assay). For
+  `demo.pdf` (a "Molecular Genetics" masthead) there is no separate type label →
+  `null`.
+- `Accession_Number` — the Accession / Case Number as printed
+  (e.g. "7220225/MOL25-157872"). This is **NOT** `Patient_MRN` (keep the strict
+  MRN rule). If the report shows "Accession/CaseNo: X", emit X here.
+- `Signing_Pathologist` — the pathologist who signed out / electronically
+  reviewed the report (e.g. an "Electronic Signature / Reviewed by:" block →
+  "James Liang, CGMBS, MB(ASCP)CM"). Not the ordering physician.
+- `Ordering_Provider_Phone` — the ordering provider's OWN phone if printed
+  separately; do NOT copy the practice/clinic phone here → `null` if only the
+  practice phone exists.
+- `Additional_Provider_Name` — a second provider the report lists beyond the
+  ordering provider (e.g. a "Treating Physician(s):" different from the ordering
+  one, or a copy-to). If ordering and treating are the SAME person, emit `null`.
 
 ---
 
 Now proceed with the ReAct loop and produce your Final Answer in the exact
-JSON shape the base prompt specified — including the `provenance` map.
+JSON shape the base prompt specified — including the `provenance` array
+(one entry per populated field, each carrying its own `field_name`).

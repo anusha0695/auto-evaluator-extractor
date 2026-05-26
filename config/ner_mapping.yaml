@@ -23,14 +23,11 @@
 # the block context (step 4 intersection) narrows it.
 label_to_umbrellas:
   # en_ner_bionlp13cg_md
-  GENE_OR_GENE_PRODUCT: [Genomic_Variant_umbrella, tested_biomarker_umbrella]
-  AMINO_ACID:           [Genomic_Variant_umbrella]
-  SIMPLE_CHEMICAL:      [other_molecular_biomarker_umbrella]
-  CANCER:               [other_molecular_biomarker_umbrella]
-  PATHOLOGICAL_FORMATION: [other_molecular_biomarker_umbrella]
-  # en_ner_bc5cdr_md
-  CHEMICAL:             [other_molecular_biomarker_umbrella]
-  DISEASE:              [other_molecular_biomarker_umbrella]
+  # v3 merge: the former Genomic_Variant_umbrella folded into the biomarker
+  # umbrella (a sequence variant is a biomarker finding + nested variant_detail),
+  # so gene / amino-acid mentions seed the biomarker + tested umbrellas now.
+  GENE_OR_GENE_PRODUCT: [other_molecular_biomarker_umbrella, tested_biomarker_umbrella]
+  AMINO_ACID:           [other_molecular_biomarker_umbrella]
   # en_core_web_sm (OntoNotes)
   PERSON:               [report_metadata]
   DATE:                 [report_metadata]
@@ -38,9 +35,21 @@ label_to_umbrellas:
   GPE:                  [report_metadata]
   LOC:                  [report_metadata]
   FAC:                  [report_metadata]
+  #
+  # DENOISE (2026-05): DISEASE / CHEMICAL / CANCER / PATHOLOGICAL_FORMATION /
+  # SIMPLE_CHEMICAL are intentionally NOT mapped. They flooded
+  # other_molecular_biomarker_umbrella with disease/biology prose from the
+  # clinical-significance section (e.g. "polycythemia vera", "neoplasms",
+  # "thrombocythemia", "Nucleic acid", "tyrosine"). That umbrella is for
+  # NON-gene MOLECULAR biomarkers (TMB, MSI, PD-L1, HRD) — which are not what a
+  # DISEASE/CHEMICAL NER label detects. Real molecular biomarkers are found by
+  # the MolecularBiomarkerTeam reading the actual blocks (its recall mandate),
+  # not from this SciSpaCy floor. Diseases/diagnoses are handled by the
+  # ClinicalInfo / SpecimenFindings teams from their blocks.
+  #
   # Everything else (CELL, TISSUE, ORGAN, ORGANISM, CARDINAL, PERCENT,
   # QUANTITY, ORDINAL, MONEY, TIME, NORP, PRODUCT, EVENT, WORK_OF_ART, LAW,
-  # LANGUAGE, ANATOMICAL_SYSTEM, ...) is intentionally omitted → dropped.
+  # LANGUAGE, ANATOMICAL_SYSTEM, DISEASE, CHEMICAL, CANCER, ...) is omitted → dropped.
 
 # --- Drop-set: block roles where EVERY entity is dropped ---------------------
 # Confirmed with user: electronic_signature, page_header, page_footer ARE

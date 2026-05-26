@@ -15,9 +15,14 @@ duplicating it costs ~20 LOC per team.
 """
 
 from teams.metadata_team import MetadataTeam, MetadataTeamResult, TeamVerdict
+from teams.section_team import SectionTeam, SectionTeamResult, build_section_team
 
 __all__ = [
     "MetadataTeam",
     "MetadataTeamResult",
     "TeamVerdict",
+    # Phase 2 — generic team used by graph_linear for every umbrella:
+    "SectionTeam",
+    "SectionTeamResult",
+    "build_section_team",
 ]

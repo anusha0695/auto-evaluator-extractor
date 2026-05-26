@@ -205,6 +205,11 @@ def make_preprocess_node(deps: PreprocessNodeDependencies):
                 deps.persistence.write_artifact(
                     doc_id, "pages", list(doc_profile.get("pages") or [])
                 ),
+                # M8a: OCR token geometry for the SME UI's pixel-tight highlight
+                # (may be empty — the UI then falls back to block-level boxes).
+                deps.persistence.write_artifact(
+                    doc_id, "word_geometry", list(doc_profile.get("word_geometry") or [])
+                ),
             )
 
             # Bundle the source PDF into the doc's artifact folder so the UI

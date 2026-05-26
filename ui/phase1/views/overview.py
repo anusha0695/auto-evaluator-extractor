@@ -58,11 +58,16 @@ def render(*, run: RunSummary, extraction: dict[str, Any] | None) -> None:
         # Quick stats on what got extracted
         meta = extraction.get("report_metadata") or {}
         n_metadata = sum(1 for v in meta.values() if v not in (None, ""))
-        n_variants = (extraction.get("Genomic_Variant_umbrella") or {}).get("count_of_Genomic_Variants", 0)
-        n_biomarkers = (extraction.get("other_molecular_biomarker_umbrella") or {}).get("count", 0)
+        biomarkers = (extraction.get("other_molecular_biomarker_umbrella") or {}).get("other_molecular_biomarkers") or []
+        n_biomarkers = (extraction.get("other_molecular_biomarker_umbrella") or {}).get("count", len(biomarkers))
+        # sequence variants are biomarker findings carrying a variant_detail (v3 merge)
+        n_variants = sum(
+            1 for bm in biomarkers for f in (bm.get("findings") or [])
+            if isinstance(f, dict) and f.get("variant_detail")
+        )
         n_tested = (extraction.get("tested_biomarker_umbrella") or {}).get("count_of_tested_biomarkers", 0)
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("metadata fields populated", n_metadata)
-        c2.metric("genomic variants", n_variants)
-        c3.metric("other biomarkers", n_biomarkers)
+        c2.metric("biomarkers", n_biomarkers)
+        c3.metric("of which variants", n_variants)
         c4.metric("tested biomarkers", n_tested)

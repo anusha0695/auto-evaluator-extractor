@@ -62,6 +62,7 @@ class ParserHypothesisMiss(BaseModel):
     candidate_text: str
     candidate_label: str = ""
     candidate_page: int = 1
+    candidate_block_id: str | None = None   # occurrences[0].block_id — clickable in the UI (§1.6)
     should_have_landed_in: str = ""
 
 

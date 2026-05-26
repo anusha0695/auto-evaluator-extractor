@@ -4,7 +4,20 @@
 **Destination (production codebase):** copied at end of all 4 phases, Option A — four phase commits in destination git history
 **Strategy:** Build all 4 phases here, snapshot each one as we go, transfer at end
 **GCP project:** `medical-report-extraction`
-**Schema (source of truth):** `config/schemas/genomic_pathology_v2.json`
+**Schema (source of truth):** `config/schemas/genomic_pathology_v3.json` (v2 is the frozen Phase-1 schema, kept for back-compat)
+
+> **v3 reality update (post-Phase-2).** The system moved from the v2 4-umbrella
+> model to **v3 with 5 sections**: `report_metadata`, `other_molecular_biomarker_umbrella`
+> (THE single biomarker umbrella — the former `Genomic_Variant_umbrella` was
+> **merged in**; a sequence variant is a biomarker finding tagged
+> `biomarker_class: sequence_variant` with a nested `variant_detail`, matching how
+> production folds variants into biomarkers), `tested_biomarker_umbrella`,
+> `significant_findings` (multi-specimen surgical pathology), and
+> `clinical_information`. So there is no `GenomicVariantTeam`; teams are
+> metadata / molecular_biomarker / tested_biomarker / clinical_info /
+> specimen_findings. The architecture-recap and Phase-1/2 sections below are the
+> historical record (v2 wording) — see `PHASE_2_COVERAGE_VS_PRODUCTION.md` for the
+> v3 schema and `PHASE_3_GAPS_AND_FIXES.md` for the expanded Phase-3 plan.
 
 ---
 
@@ -320,9 +333,27 @@ Complete the extraction layer. All 4 teams running in parallel, Planner dispatch
 
 ---
 
-# Phase 3 — VMAW + chunk-level SME review for ambiguous cases
+# Phase 3 — self-correction + escalation (recall floor, partial-accept, contextual linking, ping-back loop, VMAW, SME review)
 
-## Goal
+> **EXPANDED PLAN (authoritative): `PHASE_3_GAPS_AND_FIXES.md`.** The original
+> Phase-3 scope below (VMAW + chunk-level SME review) is the *spine* (now milestones
+> **M6 graph_v3 / re-planning loop**, **M7 VMAW**, **M8 SME UI**), but a gap analysis
+> expanded Phase 3. Decisions locked with the user:
+> - **Sub-sequenced 3a / 3b** (single Phase-3 transfer commit): **3a = M0–M5**
+>   (independent ground-truth holdout, narrative block-roles, Option-B block index,
+>   block-role recall floor, partial-accept + record-level review, contextual linking
+>   over a typed registry); **3b = M6–M8** (the canonical VMAW/loop/SME spine).
+> - **Additive where possible, in-place only where unavoidable.** New work is new
+>   files (recall-floor verifier, triage/repair/VMAW agents, `graph_v3`, Phase-3 UI);
+>   edits to earlier-phase files (`block_profiler`, `extractor`, `decision_router`,
+>   `linker`) are minimized and logged to the OWNING phase's manifest (rule 466).
+> - **Re-planning loop is more targeted than the original:** "Fixable" loops back to
+>   the *specific team's Extractor* via a triage agent, not a whole-doc re-plan.
+> - **VMAW capabilities renamed:** EC (Expand Context), CITE (Evidence Citation),
+>   **VA (Value Adjudicator** — decides the canonical value; replaces "GTC" to stop
+>   colliding with "the ground truth we build").
+
+## Goal (original spine)
 Add the side-channel fact-checker. When an Arbiter inside a team can't decide a conflict, it invokes VMAW which grounds the disputed claim in actual PDF evidence. UI gains chunk-level highlighting so SME reviewers can click a flagged item and the PDF viewer jumps to the exact bbox (using DocAI's cached layout coordinates).
 
 ## What we build

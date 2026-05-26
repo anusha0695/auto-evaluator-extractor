@@ -50,6 +50,12 @@ Pick exactly one per block:
 | `results_table` | Tabular results (gene / variant / VAF / result). |
 | `interpretation` | Free-text interpretation of results. |
 | `clinical_significance` | Free-text discussion of the variant's clinical meaning. |
+| `final_diagnosis` | Surgical-pathology Final / Pathologic Diagnosis block — the core diagnostic narrative (often carries the histologic diagnoses and microscopic findings; headers like "Final Diagnosis", "Pathologic Diagnosis", "Diagnosis", "Opinion", "Impression"). |
+| `gross_description` | Gross Description of a specimen (e.g. "three cores of tan-white fibrofatty tissue"). |
+| `microscopic_description` | Microscopic Description / histologic detail for a specimen. |
+| `synoptic_report` | Synoptic Report / TNM staging block — pTNM stage, AJCC edition, tumor size/grade, and regional lymph-node counts (headers like "Synoptic Report", "TNM Classification", "Regional Lymph Nodes"). |
+| `clinical_history` | Clinical History / Clinical Information / Reason for Referral / pre-operative diagnosis / indication for the study. (Distinct from `clinical_significance`, which is about a variant's meaning.) |
+| `addendum` | An addendum / amended-report / amendment block that REVISES an earlier result (headers like "Addendum", "Amended Report", "Amendment", "Corrected Report", "Supplemental Report", or a dated revision note). Tag these so the Linker can apply the supersession rule (an amended value wins; the original is preserved). |
 | `references` | Bibliography / citations. |
 | `cpt_codes` | CPT / MolDX billing code table. |
 | `electronic_signature` | Signing pathologist / reviewer block with CLIA #. |
@@ -81,27 +87,40 @@ are NOT the fax band.
 
 ## Closed vocabulary for `target_umbrella_hints`
 
-For each block, list **every** schema-v2 umbrella section that could extract
-content from it. A block often feeds MORE THAN ONE umbrella — emit all that
-apply, as a JSON array:
+For each block, list **every** schema section that could extract content from
+it. A block often feeds MORE THAN ONE umbrella — emit all that apply, as a JSON
+array:
 
 - `report_metadata` — patient, vendor, dates, ordering provider, practice
-- `Genomic_Variant_umbrella` — gene-level variant rows
-- `other_molecular_biomarker_umbrella` — TMB / MSI / PD-L1 / HRD etc.
-- `tested_biomarker_umbrella` — panel grid listing all tested genes
+- `other_molecular_biomarker_umbrella` — ALL biomarkers: protein-expression
+  (ER/PR/HER2/Ki-67/PD-L1), aggregate scores (TMB/MSI/HRD), AND gene sequence
+  variants (a variant is a biomarker finding with `variant_detail`)
+- `tested_biomarker_umbrella` — panel grid listing all tested genes/biomarkers
+- `significant_findings` — multi-specimen surgical-pathology narrative: gross /
+  microscopic / final diagnosis, histology, synoptic staging, lymph nodes
+- `clinical_information` — clinical history, reason for study, pre-operative diagnosis
 - `none` — block is metadata for the report itself (signature, billing,
   disclaimer, fax noise, chart caption, etc.) — no team needs it
 
 Multi-umbrella guidance (emit ALL that apply):
 
-- A `results_table` block holds gene-level variant rows AND establishes that
-  those genes were on the panel →
-  `["Genomic_Variant_umbrella", "tested_biomarker_umbrella"]`.
+- A `results_table` block holds biomarker/variant result rows AND establishes
+  that those genes were on the panel →
+  `["other_molecular_biomarker_umbrella", "tested_biomarker_umbrella"]`.
 - A `panel_or_test_name` block names the test (a metadata field captures the
   name) AND lists tested genes → often
   `["report_metadata", "tested_biomarker_umbrella"]`.
+- A `gross_description` / `microscopic_description` / `final_diagnosis` /
+  `synoptic_report` block → `["significant_findings"]` (a `final_diagnosis` or
+  `synoptic_report` that also names IHC/biomarker results may add
+  `"other_molecular_biomarker_umbrella"`).
+- A `clinical_history` block → `["clinical_information"]`.
 - A pure `specimen_metadata` / `patient_demographics` / `ordering_provider`
   block → `["report_metadata"]` only.
+- An `addendum` block carries the umbrella hint(s) of whatever it revises — if
+  the addendum revises a biomarker result, hint
+  `["other_molecular_biomarker_umbrella"]` (and/or the variant/significant
+  umbrellas as applicable) so the owning team and the Linker both see it.
 - `none` is EXCLUSIVE: if a block is `none`, emit exactly `["none"]`, never
   combined with a real umbrella.
 

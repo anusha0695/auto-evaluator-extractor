@@ -225,7 +225,7 @@ class Extractor(Agent):
             # No tool calls — the LLM should have emitted Final Answer JSON.
             content = content_text.strip()
             try:
-                final_payload = self._parse_and_validate(content)
+                final_payload = await self._structured_or_parse(content, messages)
                 break
             except (json.JSONDecodeError, SchemaValidationError, AgentError) as exc:
                 retry_count += 1
@@ -304,6 +304,22 @@ class Extractor(Agent):
             for h in re_extract_hints:
                 lines.append(f"  - {h.get('field_name')}: {h.get('hint')}")
 
+        # P3-M2 (Option B): a compact index of the blocks the Block Profiler
+        # routed to THIS team's section (block_id / page / role / bbox / snippet),
+        # so the Extractor sees the page's structure up front for accurate
+        # binding + `occurrences`, without a docai_layout_lookup round-trip. Full
+        # page text still follows; the layout/search tools remain for drill-down.
+        block_index = self._section_block_index(doc_profile)
+        if block_index:
+            lines.append("")
+            lines.append(f"## Blocks the profiler routed to `{self._schema_section}`")
+            lines.append("Locate + ground your findings here; cite the `block_id` in each "
+                         "`occurrences[]`. The full page text follows for anything not indexed.")
+            lines.append("| block_id | page | role | bbox | text (first 80 chars) |")
+            lines.append("|---|---|---|---|---|")
+            for r in block_index:
+                lines.append(f"| {r['block_id']} | {r['page']} | {r['role']} | {r['bbox']} | {r['snippet']} |")
+
         lines.append("")
         lines.append("---")
         for p in pages:
@@ -314,6 +330,37 @@ class Extractor(Agent):
             lines.append("")
 
         return "\n".join(lines)
+
+    def _section_block_index(self, doc_profile: dict[str, Any]) -> list[dict[str, Any]]:
+        """P3-M2 (Option B): compact index of blocks the Block Profiler routed to
+        THIS team's section. Joins `block_profiles` (role + hints) with `blocks`
+        (bbox + text) by block_id. Returns [] when profiles/blocks are absent
+        (e.g. older runs) so the prompt degrades gracefully to page-text only."""
+        profiles = doc_profile.get("block_profiles") or []
+        blocks = doc_profile.get("blocks") or []
+        by_id = {b.get("block_id"): b for b in blocks if isinstance(b, dict)}
+        out: list[dict[str, Any]] = []
+        for bp in profiles:
+            if not isinstance(bp, dict):
+                continue
+            if self._schema_section not in (bp.get("target_umbrella_hints") or []):
+                continue
+            bid = bp.get("block_id")
+            blk = by_id.get(bid) or {}
+            text = " ".join((blk.get("text") or "").split())
+            snippet = (text[:80] + "…") if len(text) > 80 else text
+            bbox = blk.get("bbox")
+            bbox_s = "[" + ",".join(f"{c:.2f}" for c in bbox) + "]" if isinstance(bbox, list) and bbox else ""
+            out.append({
+                "block_id": bid,
+                "page": bp.get("page_number") or blk.get("page_number") or "",
+                "role": bp.get("text_role") or "",
+                "bbox": bbox_s,
+                "snippet": snippet.replace("|", "/"),   # don't break the md table
+            })
+            if len(out) >= 60:   # bound the index
+                break
+        return out
 
     async def _execute_tool_calls(
         self,
@@ -345,6 +392,30 @@ class Extractor(Agent):
 
         return await asyncio.gather(*[_one(tc) for tc in tool_calls])
 
+    async def _structured_or_parse(self, content: str, messages: Any) -> dict[str, Any]:
+        """Final-answer parse. DEFAULT (flag off) = free-text `_parse_and_validate`
+        (identical to before). When EXTRACTOR_STRUCTURED is on, first try a Gemini
+        `json_schema` structured finalizer (Gemini enforces the section shape so the
+        model can't wrap/mis-shape it); on ANY error fall back to the free-text path,
+        so this can never degrade the default. NOT yet validated against the deep
+        biomarker schema — gate via env + A/B before flipping on by default."""
+        import os
+        if os.environ.get("EXTRACTOR_STRUCTURED", "0").lower() in ("1", "true", "yes", "on"):
+            try:
+                section = self._schema_loader.get_section(self._schema_section)
+                model = getattr(section, "pydantic_model", None)
+                if model is not None:
+                    structured = self._make_llm().with_structured_output(model, method="json_schema")
+                    result = await structured.ainvoke(messages)
+                    payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+                    self._schema_loader.validate(self._schema_section, payload)
+                    logger.info("Extractor %s: json_schema finalizer succeeded", self.agent_id)
+                    return payload
+            except Exception:  # noqa: BLE001 — never let the finalizer regress the default
+                logger.warning("Extractor %s: json_schema finalizer failed → free-text fallback",
+                               self.agent_id, exc_info=True)
+        return self._parse_and_validate(content)
+
     def _parse_and_validate(self, content: str) -> dict[str, Any]:
         """Parse JSON from the LLM's final message and validate against the
         team's schema section."""
@@ -361,12 +432,43 @@ class Extractor(Agent):
         except json.JSONDecodeError:
             m = _FINAL_JSON_RE.search(text)
             if not m:
+                self._dump_failure(content, payload=None, error="final answer is not JSON")
                 raise
             payload = json.loads(m.group(1) or m.group(2))
 
         # Pydantic validation against the team's section.
-        self._schema_loader.validate(self._schema_section, payload)
+        try:
+            self._schema_loader.validate(self._schema_section, payload)
+        except Exception as exc:  # noqa: BLE001 — dump the offending payload, then re-raise
+            self._dump_failure(content, payload=payload, error=str(exc))
+            raise
         return payload
+
+    def _dump_failure(self, content: str, *, payload: Any, error: str) -> None:
+        """DEBUG: when the extractor's final answer won't parse/validate, write the FULL
+        raw content to a local file + log a summary (parsed top-level keys, whether the
+        model WRAPPED the object under the section name, the exact error). Local-only;
+        the raw content may contain PHI — never pushed. Remove once the shape issue is
+        understood."""
+        import os
+        import time
+        keys = sorted(payload.keys()) if isinstance(payload, dict) else f"<{type(payload).__name__}>"
+        wrapped = isinstance(payload, dict) and self._schema_section in payload
+        try:
+            dbg_dir = os.path.join("local_runs", "_extractor_debug")
+            os.makedirs(dbg_dir, exist_ok=True)
+            path = os.path.join(dbg_dir, f"{self._schema_section}_{int(time.time())}.txt")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(f"agent={self.agent_id} section={self._schema_section}\n")
+                fh.write(f"parsed_top_level_keys={keys}\nwrapped_under_section_name={wrapped}\n")
+                fh.write(f"error={error}\n\n=== RAW FINAL CONTENT (verbatim) ===\n{content}\n")
+            logger.error("EXTRACTOR-DEBUG[%s]: parse/validate FAILED → wrote %s | "
+                         "top_keys=%s wrapped_under_section=%s | error=%s",
+                         self._schema_section, path, keys, wrapped, error[:300])
+        except Exception:  # noqa: BLE001 — debug dump must never mask the real error
+            logger.error("EXTRACTOR-DEBUG[%s]: parse/validate FAILED (dump-write failed) | "
+                         "top_keys=%s wrapped_under_section=%s | error=%s",
+                         self._schema_section, keys, wrapped, error[:300])
 
     @staticmethod
     def _content_to_text(content: Any) -> str:

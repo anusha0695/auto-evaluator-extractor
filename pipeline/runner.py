@@ -38,7 +38,7 @@ class RunResult:
     doc_id: str
     gcs_uri: str
     pipeline_version: PipelineVersion
-    verdict: Literal["auto_accept", "sme_flag", "errored"] | None = None
+    verdict: Literal["auto_accept", "fixable", "sme_flag", "errored"] | None = None
     verdict_reason: str = ""
     extraction: dict[str, Any] | None = None
     artifacts_gcs_prefix: str | None = None
@@ -87,10 +87,10 @@ async def run(
     """
     ObservabilityManager.init_from_env()
 
-    if version != "v1":
+    if version not in ("v1", "v2", "v3"):
         raise PipelineError(
-            f"Phase 1 runner only supports version='v1'; got {version!r}. "
-            f"Phase 2+ graphs ship in later commits.",
+            f"runner supports version='v1' (Phase 1), 'v2' (Phase 2a), and 'v3' "
+            f"(Phase 3 repair loop + VMAW); got {version!r}. v4 ships in Phase 4.",
             doc_id=doc_id,
             retry_safe=False,
         )
@@ -108,14 +108,34 @@ async def run(
         pipeline_version=version,
     )
 
-    # ----- Build dependencies + graph -----
-    if deps is None:
-        from pipeline.graph_v1 import build_graph_v1_dependencies
-        deps = build_graph_v1_dependencies()
-
-    if graph is None:
-        from pipeline.graph_v1 import build_graph_v1
-        graph = build_graph_v1(deps)
+    # ----- Build dependencies + graph (dispatch by version) -----
+    if version == "v3":
+        # graph_selfcorrecting reuses the v2 dependency set (teams/linker/binding/router) and
+        # adds the triage→repair loop + VMAW on the escalate branch. VMAW LLM hooks
+        # default off → it degrades to "escalate to SME", but the escalation_queue /
+        # agent_trace / repair_log / vmaw_log artifacts the SME UI needs are produced.
+        if deps is None:
+            from pipeline.graph_linear import build_graph_dependencies
+            deps = build_graph_dependencies()
+        if graph is None:
+            from core.checkpointer import build_checkpointer
+            from pipeline.graph_selfcorrecting import build_selfcorrecting_graph
+            graph = build_selfcorrecting_graph(deps, checkpointer=build_checkpointer(deps.storage_config))
+    elif version == "v2":
+        if deps is None:
+            from pipeline.graph_linear import build_graph_dependencies
+            deps = build_graph_dependencies()
+        if graph is None:
+            from pipeline.graph_linear import build_linear_graph
+            from core.checkpointer import build_checkpointer
+            graph = build_linear_graph(deps, checkpointer=build_checkpointer(deps.storage_config))
+    else:
+        if deps is None:
+            from pipeline.graph_v1 import build_graph_v1_dependencies
+            deps = build_graph_v1_dependencies()
+        if graph is None:
+            from pipeline.graph_v1 import build_graph_v1
+            graph = build_graph_v1(deps)
 
     # ----- Build the seed state -----
     raw_pdf_bytes: bytes | None = None
@@ -173,6 +193,11 @@ async def run(
     # ----- Invoke the graph -----
     thread_id = f"{doc_id}-{uuid.uuid4().hex[:8]}"
     cfg = {"configurable": {"thread_id": thread_id}}
+    if version == "v3":
+        # hard backstop for the triage→repair loop (recur-guard + budget terminate
+        # well before this; it only guards bugs).
+        from pipeline.graph_selfcorrecting import GRAPH_RECURSION_LIMIT
+        cfg["recursion_limit"] = GRAPH_RECURSION_LIMIT
 
     try:
         final = await graph.ainvoke(seed, config=cfg)

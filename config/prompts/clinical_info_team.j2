@@ -1,0 +1,93 @@
+{# =============================================================================
+   ClinicalInfoTeam — team-specific prompt.
+
+   Layered on config/prompts/system/extractor.j2 via {% include %}. The base
+   gives the schema-driven field contract (rendered from clinical_information in
+   genomic_pathology_v3.json — a single OBJECT section), the recall mandate, the
+   object-vs-array note, the ReAct format, the tool list, and the output format.
+   This file adds the clinical-information rules.
+
+   Jinja context (same as extractor.j2):
+     team_name = "ClinicalInfoTeam"
+     schema_section_name = "clinical_information"
+     schema_section_description, fields, available_tools, parser_hypothesis_count
+     pipeline_version
+   ============================================================================= #}
+{% include 'system/extractor.j2' %}
+
+---
+
+# ClinicalInfoTeam rules — `clinical_information`
+
+This is a single OBJECT section (not an array). It captures the clinical context
+of the order: history, the reason the study was performed, and any extra
+clinical detail. Source it from sections labelled "Clinical Information",
+"Clinical History", "Reason for Study/Referral", "Pre-operative Diagnosis", or
+the equivalent in the order header.
+
+## 1. `clinical_history` (array of objects)
+
+One object per distinct clinical-history entry, each with
+`pre_operative_diagnosis` (VERBATIM as printed). `pre_operative_diagnosis` is the
+stated diagnostic impression / pre-operative diagnosis — a *diagnosis* phrase
+("Suspicious breast mass, R/O carcinoma", "Rule out lymphoma"), NOT the patient
+presentation narrative (that is `clinical_finding_details`, see §4). Do not split
+one history into several entries: a presentation sentence and its accompanying
+diagnosis are the SAME history — the narrative goes to `clinical_finding_details`
+and only the diagnosis phrase becomes a `clinical_history` entry. Emit one object
+per genuinely distinct pre-op diagnosis; a single diagnosis → a one-element
+array; none → `[]`.
+
+## 2. `number_of_clinical_histories`
+
+DERIVED — the length of the `clinical_history` array.
+
+## 3. `reason_for_study`
+
+VERBATIM — the stated reason for the pathology examination / referral
+("Rule out JAK2 mutation", "Evaluate for malignancy"). `null` if not stated.
+
+## 4. `clinical_finding_details`
+
+VERBATIM — the patient clinical presentation / history narrative and any
+additional relevant clinical detail not captured above (age + sex, presenting
+symptoms, exam/imaging findings, prior treatment, relevant comorbidity as
+printed) — e.g. "57-year-old female with a palpable right breast mass and
+abnormal mammogram." This is where the descriptive presentation belongs; the
+distilled diagnosis phrase from the same block belongs to
+`pre_operative_diagnosis` (§1). `null` if none.
+
+## 5. Do not pull diagnosis FINDINGS here
+
+Histologic/molecular *findings* belong to the findings/biomarker/significant
+sections. This section is the **pre-test clinical context**, not the result.
+A line like "Final diagnosis: invasive ductal carcinoma" is NOT
+`clinical_information` — leave it to the SpecimenFindingsTeam.
+
+## 6. `page_number` + `llm_confidence_score`
+
+`page_number` is DERIVED (where the clinical-information block sits). Emit a
+top-level `llm_confidence_score` in [0.0, 1.0] for the section.
+
+---
+
+## Per-field rationale (`provenance`) — ALWAYS emit, as an ARRAY
+
+Emit a `provenance` **array** on `clinical_information` — ONE entry per field you
+populated. Each entry is `{field_name, block_id, page, type, rationale}` where
+`field_name` is the populated field, `type` is one of
+`verbatim` | `inferred` | `derived` | `absent`, and `rationale` is ONE short clause
+saying WHY you chose that value (required when `type` is `inferred`/`derived`). This
+is the per-field "why" the SME reviewer reads — emit it for EVERY field you
+populated, keep it brief, ground it in a cited block, and never restate PHI beyond
+the value itself. Use an ARRAY (not a keyed object).
+
+```json
+"provenance": [
+  { "field_name": "primary_diagnosis", "block_id": "b5", "page": 1, "type": "verbatim",
+    "rationale": "clinical history line states the diagnosis verbatim" }
+]
+```
+
+Now run the ReAct loop and produce the `clinical_information` object in the exact
+shape the base prompt specified.

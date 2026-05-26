@@ -19,9 +19,9 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help setup install install-phase2 venv \
-        verify verify-cloud \
+        verify verify-cloud verify-phase2 verify-phase3 \
         lint lint-fix format typecheck test test-cov \
-        run-local score ui snapshot \
+        run-local score to-production ui snapshot \
         clean clean-cache clean-venv
 
 # ----- variables --------------------------------------------------------------
@@ -61,8 +61,11 @@ venv:  ## Create the .venv with python3.12 (or 3.11 / 3.10 if found)
 install: venv  ## pip install -r requirements.txt (Phase 1 essentials + spaCy models)
 	$(PIP) install -r requirements.txt
 
-install-phase2: install  ## pip install -r requirements-phase2.txt (medspacy + hgvs; needs libpq-dev)
+install-phase2: install  ## pip install -r requirements-phase2.txt (medspacy + hgvs/cdot; all optional — tools degrade gracefully)
 	$(PIP) install -r requirements-phase2.txt
+
+fetch-hgnc:  ## Refresh config/data/hgnc_aliases.tsv from the HGNC complete set (keeps the seed on failure)
+	$(PY) scripts/fetch_hgnc.py
 
 # ----- verification -----------------------------------------------------------
 verify:  ## Local environment check (no cloud calls)
@@ -70,6 +73,16 @@ verify:  ## Local environment check (no cloud calls)
 
 verify-cloud:  ## Full check including DocAI / GCS / Gemini pings
 	$(PY) scripts/verify_environment.py
+
+verify-phase2:  ## Phase 2 milestone gates (run every scripts/gates/gate_p2_*.py in order)
+	@for g in $$(ls scripts/gates/gate_p2_*.py 2>/dev/null | sort -V); do \
+	  echo "=== $$g ==="; PYTHONPATH=. $(PY) $$g || exit 1; \
+	done
+
+verify-phase3:  ## Phase 3 milestone gates (run every scripts/gates/gate_p3_*.py in order)
+	@for g in $$(ls scripts/gates/gate_p3_*.py 2>/dev/null | sort -V); do \
+	  echo "=== $$g ==="; PYTHONPATH=. $(PY) $$g || exit 1; \
+	done
 
 # ----- code quality -----------------------------------------------------------
 lint:  ## Ruff lint check
@@ -118,6 +131,10 @@ score:  ## Score an extraction against ground_truth — usage: make score DOC=de
 	else \
 	  $(PY) scripts/score_against_ground_truth.py --doc "$(DOC)" --threshold $(THRESHOLD); \
 	fi
+
+to-production:  ## Convert a doc's extraction → production schema — usage: make to-production DOC=demo
+	@if [ -z "$(DOC)" ]; then echo "Usage: make to-production DOC=demo  (add ARGS=--raw to ignore the SME-reviewed copy)"; exit 1; fi
+	PYTHONPATH=. $(PY) scripts/to_production.py --doc "$(DOC)" $(ARGS)
 
 ui:  ## Launch the Streamlit results browser — usage: make ui PHASE=1
 	$(STREAMLIT) run ui/phase$(PHASE)/app.py \

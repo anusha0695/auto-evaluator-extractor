@@ -60,6 +60,7 @@ logger = logging.getLogger("process_local")
 
 VERDICT_COLOR = {
     "auto_accept": "\033[1;32m",   # green
+    "fixable":     "\033[1;36m",   # cyan (Phase 2: refuted bind → Arbiter/SME)
     "sme_flag":    "\033[1;33m",   # yellow
     "errored":     "\033[1;31m",   # red
 }
@@ -165,14 +166,45 @@ def _run_result_to_dict(r: RunResult) -> dict[str, Any]:
         "total_latency_ms": r.total_latency_ms,
         "cost_usd": r.cost_usd,
         "error": r.error,
+        # PHI-safe verifier summary: names, pass/fail, counts, notes, and error
+        # LOCATIONS (field paths) only — never raw extracted values.
+        "verifier_summary": _sanitized_verifier_summary(r),
+        # The assembled v3 envelope — included so it can be inspected even when
+        # the verdict isn't auto_accept (persistence only writes it on accept).
+        "extraction": r.extraction,
+    }
+
+
+def _sanitized_verifier_summary(r: RunResult) -> dict[str, Any]:
+    """Build a PHI-safe view of verifier scorecards + binding summary from the
+    run's final_state. Drops error `msg` (may echo values); keeps `loc` paths."""
+    fs = r.final_state or {}
+    cards = []
+    for s in (fs.get("verifier_scorecards") or []):
+        cards.append({
+            "verifier_name": s.get("verifier_name"),
+            "passed": s.get("passed"),
+            "notes": s.get("notes", ""),
+            "error_locs": [e.get("loc") for e in (s.get("field_errors") or [])][:25],
+            "cosmetic_locs": [e.get("loc") for e in (s.get("cosmetic_notes") or [])][:25],
+        })
+    return {
+        "scorecards": cards,
+        "binding_verifier": fs.get("binding_verifier"),
+        "team_results": {
+            k: {"verdict": v.get("verdict"),
+                "llm_confidence_score": v.get("llm_confidence_score"),
+                "needs_review_count": v.get("needs_review_count")}
+            for k, v in (fs.get("team_results") or {}).items()
+        },
     }
 
 
 def _aggregate_exit_code(results: list[RunResult]) -> int:
-    """0 if every doc auto_accept; 1 if any sme_flag; 2 if any errored."""
+    """0 if every doc auto_accept; 1 if any sme_flag/fixable; 2 if any errored."""
     if any(r.verdict == "errored" for r in results):
         return 2
-    if any(r.verdict == "sme_flag" for r in results):
+    if any(r.verdict in ("sme_flag", "fixable") for r in results):
         return 1
     return 0
 
@@ -228,8 +260,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Process every .pdf under the given gs://bucket/prefix/.",
     )
     p.add_argument(
-        "--version", default="v1", choices=["v1"],
-        help="Pipeline version (default: v1; Phase 2-4 versions ship later).",
+        "--version", default="v1", choices=["v1", "v2", "v3"],
+        help="Pipeline version (default: v1; v2 = Phase 2a genomic umbrellas + clinical; "
+             "v3 = Phase 3 repair loop + VMAW + SME review artifacts).",
     )
     p.add_argument(
         "--doc-id", metavar="ID",

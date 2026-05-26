@@ -326,6 +326,10 @@ class DocAIParser:
         else:
             blocks = self._fallback_blocks_from_pages(document)
 
+        # M2.5: stitch tables that continue across a page break so page-N+1 rows
+        # remain bindable to the page-N header.
+        self._stitch_continuation_tables(blocks)
+
         # ----- Pages -----
         # Layout Parser doesn't always populate `document.pages` — when it
         # doesn't, synthesize one PageText per unique page_number from the
@@ -376,14 +380,93 @@ class DocAIParser:
         for page in pages:
             page["block_ids_on_page"] = per_page_block_ids.get(page["page_number"], [])
 
+        # M8a: capture OCR token geometry (for the SME UI's pixel-tight highlight).
+        # Empty when the response has no token layer (Layout-Parser-only) — the UI
+        # then falls back to the block box. Defensive: never sink a parse.
+        word_geometry: list = []
+        try:
+            from preprocess.word_geometry import extract_word_geometry
+            word_geometry = extract_word_geometry(document)
+        except Exception:
+            logger.exception("docai_parser: word-geometry capture failed (non-fatal)")
+
         return DocProfile(
             total_pages=len(pages),
             pages=pages,
             blocks=blocks,
             block_profiles=[],            # filled later by BlockProfiler
+            word_geometry=word_geometry,
             raw_docai_gcs_uri=raw_uri,
             fax_header_blocks_removed=0,  # filled later by FaxHeaderFilter
         )
+
+    @staticmethod
+    def _stitch_continuation_tables(blocks: list[BlockInfo]) -> None:
+        """Merge a headerless continuation table on page N+1 into the table it
+        continues from on page N (M2.5, gap #2). Mutates `blocks` in place:
+        a continuation table's cells are re-tagged with the parent `table_id`,
+        their `row` indices are offset to continue after the parent's last row,
+        and `table_continued` is set True — so a binder reading one `table_id`
+        sees the page-N header AND the page-N+1 rows.
+
+        Heuristic for a continuation: a table with NO header row whose column
+        count equals that of the most recent table whose last page is exactly
+        one less. Chains across 3+ pages (the parent's last page advances).
+        """
+        # Per-table summary in first-appearance order.
+        order: list[str] = []
+        summary: dict[str, dict[str, Any]] = {}
+        for idx, b in enumerate(blocks):
+            tid = b.get("table_id")
+            if not tid:
+                continue
+            s = summary.get(tid)
+            if s is None:
+                s = {"first_index": idx, "page": b.get("page_number") or 1,
+                     "max_col_extent": 0, "max_row": 0, "has_header": False}
+                summary[tid] = s
+                order.append(tid)
+            s["page"] = min(s["page"], b.get("page_number") or 1)
+            s["max_col_extent"] = max(s["max_col_extent"],
+                                      int(b.get("col", 0)) + int(b.get("col_span", 1) or 1))
+            s["max_row"] = max(s["max_row"], int(b.get("row", 0)))
+            if b.get("is_table_header"):
+                s["has_header"] = True
+
+        # Canonical (parent) tables we can continue onto: id → live summary.
+        canon: dict[str, dict[str, Any]] = {}
+        remap: dict[str, tuple[str, int]] = {}   # child_tid → (parent_tid, row_offset)
+        for tid in order:
+            s = summary[tid]
+            if s["has_header"]:
+                canon[tid] = {"last_page": s["page"], "cols": s["max_col_extent"],
+                              "max_row": s["max_row"], "canonical": tid}
+                continue
+            # headerless → look for a parent ending on the previous page, same cols
+            parent = None
+            for cid, cs in canon.items():
+                if cs["last_page"] == s["page"] - 1 and cs["cols"] == s["max_col_extent"]:
+                    parent = cs
+                    break
+            if parent is None:
+                # treat as its own (headerless) table
+                canon[tid] = {"last_page": s["page"], "cols": s["max_col_extent"],
+                              "max_row": s["max_row"], "canonical": tid}
+                continue
+            offset = parent["max_row"] + 1
+            remap[tid] = (parent["canonical"], offset)
+            parent["last_page"] = s["page"]
+            parent["max_row"] = offset + s["max_row"]
+
+        if not remap:
+            return
+        for b in blocks:
+            tid = b.get("table_id")
+            if tid in remap:
+                parent_tid, offset = remap[tid]
+                b["table_id"] = parent_tid
+                b["row"] = int(b.get("row", 0)) + offset
+                b["table_continued"] = True
 
     @staticmethod
     def _count_proto_bboxes(document: Any) -> tuple[int, int]:
@@ -568,23 +651,53 @@ class DocAIParser:
                     text=text,
                 )
 
-            # Recurse into nested children if present
-            nested = []
-            if text_block and getattr(text_block, "blocks", None):
-                nested = text_block.blocks
-            elif table_block and getattr(table_block, "body_rows", None):
-                # Tables: walk each cell's blocks
-                nested = [
-                    cell_block
-                    for row in (
-                        list(getattr(table_block, "header_rows", []) or [])
-                        + list(getattr(table_block, "body_rows", []) or [])
-                    )
-                    for cell in (row.cells or [])
-                    for cell_block in (cell.blocks or [])
-                ]
-            if nested:
-                yield from self._walk_layout_blocks(nested, parent_path=section_path)
+            # Recurse into nested children if present.
+            if table_block and (
+                getattr(table_block, "header_rows", None)
+                or getattr(table_block, "body_rows", None)
+            ):
+                # M2.5: walk table cells WITH structure (row/col/span), not flat.
+                table_id = block_id or f"{section_path}#table"
+                yield from self._walk_table_block(
+                    table_block, table_id=table_id, parent_path=section_path,
+                )
+            elif text_block and getattr(text_block, "blocks", None):
+                yield from self._walk_layout_blocks(
+                    text_block.blocks, parent_path=section_path,
+                )
+
+    def _walk_table_block(
+        self,
+        table_block: Any,
+        *,
+        table_id: str,
+        parent_path: str,
+    ) -> Any:
+        """Yield each table cell's leaf BlockInfo(s) stamped with table-structure
+        coordinates (M2.5). Header rows are emitted first (row 0..), then body
+        rows, so a downstream Binder can read column headers at the low row
+        indices. `row_span`/`col_span` come straight from the DocAI cell."""
+        header_rows = list(getattr(table_block, "header_rows", []) or [])
+        body_rows = list(getattr(table_block, "body_rows", []) or [])
+        rows = [(r, True) for r in header_rows] + [(r, False) for r in body_rows]
+        for r_idx, (row, is_header) in enumerate(rows):
+            cells = list(getattr(row, "cells", []) or [])
+            for c_idx, cell in enumerate(cells):
+                row_span = int(getattr(cell, "row_span", 1) or 1)
+                col_span = int(getattr(cell, "col_span", 1) or 1)
+                cell_path = f"{parent_path}/tr{r_idx}/td{c_idx}"
+                leaf_blocks = list(self._walk_layout_blocks(
+                    getattr(cell, "blocks", []) or [], parent_path=cell_path,
+                ))
+                for lb in leaf_blocks:
+                    lb["table_id"] = table_id
+                    lb["row"] = r_idx
+                    lb["col"] = c_idx
+                    lb["row_span"] = row_span
+                    lb["col_span"] = col_span
+                    lb["is_table_header"] = is_header
+                    lb["table_continued"] = False
+                    yield lb
 
     @staticmethod
     def _extract_bbox(block: Any) -> list[float]:

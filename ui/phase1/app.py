@@ -32,9 +32,13 @@ import streamlit as st  # noqa: E402
 
 from ui.phase1.data_layer import load_extraction  # noqa: E402
 from ui.phase1.views import (  # noqa: E402
+    entity_browser_view,
     explorer_view,
+    extraction_v2_view,
     metadata_extraction_view,
     overview,
+    production_browser_view,
+    sme_review_view,
 )
 from ui.phase1.results_browser import render as render_sidebar  # noqa: E402
 
@@ -70,8 +74,9 @@ def main() -> None:
     # ----- Page tabs -----------------------------------------------------
     extraction = load_extraction(run.doc_id)
 
-    tab_explorer, tab_overview, tab_meta = st.tabs(
-        ["🧩 Block explorer", "📄 Overview", "🔍 Metadata extraction"]
+    tab_explorer, tab_overview, tab_meta, tab_v2, tab_entities, tab_prod, tab_review = st.tabs(
+        ["🧩 Block explorer", "📄 Overview", "🔍 Metadata extraction",
+         "🧬 Phase 2a extraction", "🔬 Entity browser", "🏭 Production output", "✅ Review queue"]
     )
 
     with tab_explorer:
@@ -82,6 +87,18 @@ def main() -> None:
 
     with tab_meta:
         metadata_extraction_view.render(run=run, extraction=extraction)
+
+    with tab_v2:
+        extraction_v2_view.render(run=run)
+
+    with tab_entities:
+        entity_browser_view.render(run=run)
+
+    with tab_prod:
+        production_browser_view.render(run=run)
+
+    with tab_review:
+        sme_review_view.render(run=run)
 
 
 if __name__ == "__main__":

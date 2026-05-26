@@ -47,16 +47,23 @@ TextRole = Literal[
     "report_title", "vendor_branding", "practice_block", "patient_demographics",
     "specimen_metadata", "ordering_provider", "accession_block",
     "panel_or_test_name", "methodology", "results_table", "interpretation",
-    "clinical_significance", "references", "cpt_codes", "electronic_signature",
-    "page_header", "page_footer", "fax_transport_noise", "chart_image_caption",
-    "disclaimer_or_notes", "other",
+    "clinical_significance",
+    # P3-M1: surgical-pathology + clinical narrative roles (give the recall floor
+    # block-roles to map onto significant_findings / clinical_information).
+    "final_diagnosis", "gross_description", "microscopic_description",
+    "synoptic_report", "clinical_history",
+    "addendum", "references", "cpt_codes",
+    "electronic_signature", "page_header", "page_footer", "fax_transport_noise",
+    "chart_image_caption", "disclaimer_or_notes", "other",
 ]
 
 TargetUmbrellaHint = Literal[
     "report_metadata",
-    "Genomic_Variant_umbrella",
     "other_molecular_biomarker_umbrella",
     "tested_biomarker_umbrella",
+    # Phase 2 (schema v3):
+    "significant_findings",
+    "clinical_information",
     "none",
 ]
 

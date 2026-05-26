@@ -1,0 +1,154 @@
+# Typed link registry (P3-M5) — every cross/intra-section relationship the
+# contextual Linking agent may emit. ALL links are decided CONTEXTUALLY (the LLM
+# adjudicator); this catalog is (a) the vocabulary fed to the agent and (b) the
+# deterministic safety net: a proposed link whose `type` is unknown/inactive, or
+# whose endpoint sections don't match the registered pair, is DROPPED before it
+# can become ground truth.
+#
+# `endpoints` is order-tolerant — validation compares the SET {from_section,
+# to_section} of the proposed link against the registered set, so a direction
+# flip by the agent is tolerated (the type name carries the semantics).
+#
+# Tiers 1+2 are active in Phase 3. Tier 3 is listed but `active: false` — turning
+# it on later needs no new machinery, just `active: true`.
+
+link_types:
+  # ---- Tier 1 (core) -----------------------------------------------------
+  - type: tested_to_result
+    tier: 1
+    active: true
+    from_section: tested_biomarker_umbrella
+    to_section: other_molecular_biomarker_umbrella
+    description: >-
+      A tested-panel entry to its result in the biomarker umbrella. Generalizes
+      variant_on_panel beyond variants (e.g. ER tested to ER positive 95%).
+
+  - type: variant_on_panel
+    tier: 1
+    active: true
+    from_section: other_molecular_biomarker_umbrella
+    to_section: tested_biomarker_umbrella
+    description: >-
+      A sequence-variant biomarker (carries variant_detail) to the panel entry
+      for the same HGNC gene. Also emitted deterministically by the gene-key seed.
+
+  - type: biomarker_on_specimen
+    tier: 1
+    active: true
+    from_section: other_molecular_biomarker_umbrella
+    to_section: significant_findings
+    description: A biomarker/variant to the specimen it was assayed on.
+
+  - type: superseded_by
+    tier: 1
+    active: true
+    from_section: other_molecular_biomarker_umbrella
+    to_section: other_molecular_biomarker_umbrella
+    description: An original finding to the addendum finding that amends it.
+
+  - type: staging_of_specimen
+    tier: 1
+    active: true
+    from_section: significant_findings
+    to_section: significant_findings
+    description: A pTNM stage to the specimen(s) it describes (pT to tumor, pN to node).
+
+  # ---- Tier 2 (clinically central) ---------------------------------------
+  - type: biomarker_characterizes_finding
+    tier: 2
+    active: true
+    from_section: other_molecular_biomarker_umbrella
+    to_section: significant_findings
+    description: A histologic diagnosis to its biomarker profile.
+
+  - type: finding_interpretation
+    tier: 2
+    active: true
+    from_section: significant_findings
+    to_section: significant_findings
+    description: A finding/variant to its interpretation / clinical-significance paragraph.
+
+  - type: nodal_status_supports_stage
+    tier: 2
+    active: true
+    from_section: significant_findings
+    to_section: significant_findings
+    description: lymph_node_details to the pN component it supports.
+
+  - type: regional_node_of
+    tier: 2
+    active: true
+    from_section: significant_findings
+    to_section: significant_findings
+    description: A regional-node specimen to the primary-tumor specimen.
+
+  # ---- Tier 2 · describes_specimen family + procedure (intra-finding cross-refs, P3-M10a) ----
+  # All endpoints are significant_findings ↔ significant_findings. They relate a
+  # describer sub-object (gross/micro/morphology/histologic/ancillary) or the
+  # procedure to the specimen(s) it describes/produced WITHIN one specimen_findings
+  # record. Kept as separate types (Approach B) so each is independently
+  # active-toggleable + tunable + prunable per the M10d contested-rate metrics.
+  # NOTE (M10b): committing these needs nested-ref resolution — the deep refs
+  # (…specimen_findings[i].gross_description ↔ …specimen[j]) are resolved by the
+  # M10b generalization of _REF_RE/_ref_resolves; the rows here register the
+  # vocabulary + endpoints only.
+  - type: procedure_of_specimen
+    tier: 2
+    active: true
+    from_section: significant_findings
+    to_section: significant_findings
+    description: A procedure (procedure_details) to the specimen(s) it produced.
+
+  - type: gross_describes_specimen
+    tier: 2
+    active: true
+    from_section: significant_findings
+    to_section: significant_findings
+    description: A gross_description paragraph to the specimen it describes.
+
+  - type: microscopic_describes_specimen
+    tier: 2
+    active: true
+    from_section: significant_findings
+    to_section: significant_findings
+    description: A microscopic_description paragraph to the specimen it describes.
+
+  - type: morphology_of_specimen
+    tier: 2
+    active: true
+    from_section: significant_findings
+    to_section: significant_findings
+    description: A morphology_findings block to the specimen it characterizes.
+
+  - type: histologic_describes_specimen
+    tier: 2
+    active: true
+    from_section: significant_findings
+    to_section: significant_findings
+    description: A histologic finding to the specimen it describes.
+
+  - type: ancillary_describes_specimen
+    tier: 2
+    active: true
+    from_section: significant_findings
+    to_section: significant_findings
+    description: An ancillary-study finding to the specimen it describes.
+
+  # ---- Tier 3 (CONFIG TOGGLE — clinical_information → significant_findings) ----
+  # Locked decision (P3-M10): keep these OFF by default; flip `active: true` to
+  # enable (no code change — catalog_text + validate_link pick them up). They are
+  # the noisiest cross-section links; M10d's per-type contested-rate metrics tell
+  # us when (if) they're worth turning on.
+  - type: indication_for
+    tier: 3
+    active: false
+    from_section: clinical_information
+    to_section: significant_findings
+    description: "A clinical indication to the finding it motivated. (toggle: set active:true to enable)"
+
+  - type: clinical_history_supports_finding
+    tier: 3
+    active: false
+    from_section: clinical_information
+    to_section: significant_findings
+    description: "A clinical-history item to a finding it contextualizes. (toggle: set active:true to enable)"

@@ -1,0 +1,32 @@
+# Assay-method synonyms → canonical method label. Used by method_normalize for
+# the dedup equivalence key (so "IHC" and "Immunohistochemistry" don't wrongly
+# split a biomarker into two findings). Match is case-insensitive; the verbatim
+# surface is always preserved separately.
+methods:
+  IHC:
+    - immunohistochemistry
+    - immunohistochemical
+    - immunohistochemical stain
+    - immunostain
+    - immunoperoxidase
+  FISH:
+    - fluorescence in situ hybridization
+    - fluorescent in situ hybridization
+    - in situ hybridization
+  NGS:
+    - next generation sequencing
+    - next-generation sequencing
+    - massively parallel sequencing
+  PCR:
+    - polymerase chain reaction
+    - quantitative pcr
+    - qpcr
+    - rt-pcr
+    - real-time pcr
+  Sanger:
+    - sanger sequencing
+    - sanger
+  Karyotype:
+    - karyotyping
+    - cytogenetics
+    - conventional cytogenetics

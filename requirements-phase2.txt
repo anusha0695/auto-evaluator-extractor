@@ -3,23 +3,35 @@
 #   1. Install Phase 1: pip install -r requirements.txt
 #   2. When Phase 2 work begins: pip install -r requirements-phase2.txt
 #
-# Phase 2 deps as of 2026-05:
+# DESIGN NOTE (supersedes the 2026-05-18 note): every Phase 2 tool is built to
+# PREFER its real library and DEGRADE to a deterministic offline fallback when
+# the library isn't installed — so the pipeline runs in a bare environment and
+# is upgraded simply by installing these. None of these reach the network at
+# runtime; none require Postgres/UTA or an external API (PHI/BAA constraint).
 #
-#   medspacy   — negation detection. Critical for the Genomic_Variant_umbrella
-#                section: "JAK2 V617F Not Detected" must be tagged as a NEGATIVE
-#                finding, not as a positive variant call. demo.pdf is the
-#                canonical case where this matters.
+#   medspacy   — assertion/negation via ConText (preprocess/negation.py).
+#                Captures "Not Detected" → negated and hedging ("suggestive of",
+#                "cannot exclude") → uncertain. Fallback: deterministic
+#                ConText-lite cue lexicon (NEGATION_BACKEND=lite).
 #
-# NOT needed (decisions made 2026-05-18):
-#   hgvs       — the Python library pulls in psycopg2 + the UTA Postgres DB,
-#                heavyweight infra we don't need. HGVS prefix conventions
-#                ("1849G>T" → "c.1849G>T", "V617F" → "p.V617F") are simple
-#                enough to handle with regex / string ops in
-#                preprocess/hgvs_normalize.py (no library).
-#   hgnc       — gene alias resolution (HER2 → ERBB2, etc). No pip package
-#                needed; HGNC publishes a free TSV at
-#                https://www.genenames.org/cgi-bin/download/custom. Phase 2
-#                downloads it once into config/data/hgnc_aliases.tsv and
-#                loads it as a dict at boot.
+#   hgvs       — biocommons offline HGVS parser (preprocess/hgvs_validate.py),
+#                HGVS_BACKEND=parse (default). Syntax/structure validation,
+#                version-aware. NO UTA Postgres (parser only). Fallback: a
+#                deterministic regex structural validator (auto when hgvs is
+#                absent). Chosen over pyhgvs (unmaintained) and Mutalyzer (API).
+#
+#   cdot       — opt-in (HGVS_BACKEND=cdot): cdot JSON transcripts give the
+#                hgvs library 3'-rule normalization + c.<->g. mapping for
+#                cross-variant EQUIVALENCE, still offline (no Postgres).
+#
+#   rapidfuzz  — optional speedup for fuzzy HGNC OCR repair. Fallback: a bounded
+#                Levenshtein in preprocess/hgnc_resolver.py (stdlib, no dep).
+#
+# HGNC gene aliases use a free TSV (no pip package): refresh into
+# config/data/hgnc_aliases.tsv via `make fetch-hgnc`; an offline seed ships for
+# dev. Biomarker/method synonyms are config YAMLs (no dep).
 
-medspacy           # negation detection (preprocess/medspacy_negation.py)
+medspacy           # assertion/negation ConText (fallback: ConText-lite)
+hgvs               # biocommons offline HGVS parser (fallback: regex validator)
+cdot               # opt-in HGVS 3'-normalization + mapping (HGVS_BACKEND=cdot)
+rapidfuzz          # optional fuzzy-match speedup (fallback: stdlib Levenshtein)

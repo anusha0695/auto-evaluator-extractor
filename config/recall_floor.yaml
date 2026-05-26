@@ -1,0 +1,84 @@
+# =============================================================================
+# Block-role recall floor (P3-M3).
+#
+# The SECTION/FIELD-level recall safety net for the narrative sections (the NER
+# seed is the ENTITY-level net and covers only the structured sections). Logic:
+# if the Block Profiler tagged a block with `role` but the schema `field` it
+# implies came back EMPTY in the extraction, that is a CANDIDATE miss. An AI
+# re-read then confirms "genuinely absent" (drop) vs "present, we missed it"
+# (real miss). `strictness`:
+#   - loud    : a confirmed miss is a hard gap (→ ping-back/escalate in M6).
+#   - quiet   : advisory only (lowers confidence; never hard-fails).
+#
+# `field` is owned by the schema; a completeness check (verification/recall_floor.py)
+# verifies every rule references a real schema field and flags schema fields with
+# no rule. `check` tells the evaluator how to test presence:
+#   - scalar              : envelope[section][path[0]] is non-null
+#   - scalar_or_array     : non-null AND (if a list) non-empty
+#   - specimen_field      : ANY significant_findings specimen has the nested path non-null
+#   - specimen_array      : ANY specimen has a non-empty list at path[0]
+# =============================================================================
+
+role_field_rules:
+  # --- significant_findings (surgical-pathology narrative) -------------------
+  - role: synoptic_report
+    section: significant_findings
+    check: specimen_field
+    path: ["pTNM_staging_details", "pTNM_stage"]
+    strictness: loud
+  - role: synoptic_report
+    section: significant_findings
+    check: specimen_field
+    path: ["lymph_node_details", "lymph_node_status"]
+    strictness: quiet
+  - role: final_diagnosis
+    section: significant_findings
+    check: specimen_array
+    path: ["histologic_findings"]
+    strictness: loud
+  - role: microscopic_description
+    section: significant_findings
+    check: specimen_field
+    path: ["microscopic_description", "text"]
+    strictness: loud
+  - role: gross_description
+    section: significant_findings
+    check: specimen_field
+    path: ["gross_description", "text"]
+    strictness: quiet
+
+  # --- clinical_information --------------------------------------------------
+  - role: clinical_history
+    section: clinical_information
+    check: scalar_or_array
+    path: ["reason_for_study"]
+    strictness: quiet
+  - role: clinical_history
+    section: clinical_information
+    check: scalar_or_array
+    path: ["clinical_history"]
+    strictness: quiet
+
+  # --- report_metadata (fixes the coarse NER metadata floor) -----------------
+  - role: patient_demographics
+    section: report_metadata
+    check: scalar
+    path: ["Patient_Last_Name"]
+    strictness: loud
+  - role: accession_block
+    section: report_metadata
+    check: scalar
+    path: ["Accession_Number"]
+    strictness: quiet
+  - role: ordering_provider
+    section: report_metadata
+    check: scalar
+    path: ["Ordering_Provider_Last_Name"]
+    strictness: quiet
+
+  # --- biomarker / panel (overlaps the NER floor; belt-and-suspenders) -------
+  - role: results_table
+    section: other_molecular_biomarker_umbrella
+    check: scalar_or_array
+    path: ["other_molecular_biomarkers"]
+    strictness: quiet

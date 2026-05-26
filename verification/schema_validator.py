@@ -30,6 +30,7 @@ The team-emit-sme-flag short-circuit:
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any
 
@@ -57,11 +58,6 @@ def build_phase1_envelope(report_metadata: dict[str, Any] | None) -> dict[str, A
         # sums only the 3 array umbrellas. For Phase 1 all 3 are empty → 0.
         "count_of_extracted_objects": 0,
         "report_metadata": report_metadata or {},
-        "Genomic_Variant_umbrella": {
-            "count_of_Genomic_Variants": 0,
-            "llm_confidence_score": None,
-            "Genomic_Variants": [],
-        },
         "other_molecular_biomarker_umbrella": {
             "count": 0,
             "llm_confidence_score": None,
@@ -74,6 +70,55 @@ def build_phase1_envelope(report_metadata: dict[str, Any] | None) -> dict[str, A
             "tested_biomarkers": [],
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Envelope-validation schema relaxation
+# ---------------------------------------------------------------------------
+
+
+def _relax_schema_for_envelope(schema: dict[str, Any]) -> dict[str, Any]:
+    """Return a deep copy of `schema` with every object subschema made
+    nullable and tolerant of extra keys.
+
+    This mirrors, at the jsonschema layer, the tolerance the Pydantic loader
+    already applies (`extra="ignore"` + Optional nested models). Without it the
+    Draft7Validator would structural-fail on exactly the payloads the section
+    teams committed — a nested object emitted as `null` (e.g. an empty
+    `lymph_node_details`) or carrying a plausible-but-unmodelled key (e.g.
+    `lymphovascular_invasion`, `page_number`). Genuine type mismatches on a
+    POPULATED object and `required`-key gaps still surface.
+
+    Only a copy is relaxed; the strict schema returned by
+    `SchemaLoader.get_root_schema()` (used as Gemini `response_schema`) is left
+    untouched so structured-output generation stays strict.
+    """
+    return _relax_node(copy.deepcopy(schema))
+
+
+def _relax_node(node: Any) -> Any:
+    if isinstance(node, dict):
+        t = node.get("type")
+        is_object = t == "object" or (isinstance(t, list) and "object" in t)
+        if is_object:
+            # allow null alongside object
+            if isinstance(t, str):
+                node["type"] = [t, "null"]
+            elif isinstance(t, list) and "null" not in t:
+                node["type"] = t + ["null"]
+            # tolerate extra keys
+            if node.get("additionalProperties") is False:
+                node["additionalProperties"] = True
+        for key, val in list(node.items()):
+            # recurse into schema-bearing positions only
+            if key in {"properties", "patternProperties", "$defs", "definitions"} and isinstance(val, dict):
+                for k2, v2 in val.items():
+                    val[k2] = _relax_node(v2)
+            elif key in {"items", "additionalProperties", "contains"} and isinstance(val, dict):
+                node[key] = _relax_node(val)
+            elif key in {"allOf", "anyOf", "oneOf"} and isinstance(val, list):
+                node[key] = [_relax_node(v) for v in val]
+    return node
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +165,16 @@ class SchemaValidator:
         try:
             from jsonschema import Draft7Validator
 
-            root_schema = self._schema_loader.get_root_schema()
+            # Validate against a RELAXED copy that mirrors the Pydantic loader's
+            # tolerance: every object subschema is made nullable and allowed to
+            # carry extra keys. The teams already commit such payloads (a
+            # specimen with no lymph_node_details emits null; an extractor may
+            # add a plausible-but-unmodelled key like lymphovascular_invasion),
+            # so the envelope verifier must not structural-fail on the very
+            # shapes Pydantic accepted. Genuine type/required violations on
+            # POPULATED objects still surface. We relax a deep copy only — the
+            # strict schema Gemini uses as `response_schema` is untouched.
+            root_schema = _relax_schema_for_envelope(self._schema_loader.get_root_schema())
             validator = Draft7Validator(root_schema)
             for err in validator.iter_errors(envelope):
                 errors.append({

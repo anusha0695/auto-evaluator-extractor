@@ -42,7 +42,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
@@ -55,10 +55,26 @@ logger = logging.getLogger(__name__)
 ExtractionMode = Literal["VERBATIM", "DERIVED", "VERBATIM_OR_INFERRED"]
 UmbrellaSection = Literal[
     "report_metadata",
-    "Genomic_Variant_umbrella",
     "other_molecular_biomarker_umbrella",
     "tested_biomarker_umbrella",
+    # Phase 2 (schema v3) additions:
+    "significant_findings",
+    "clinical_information",
 ]
+
+# Sections that MUST be present in the supported v3 schema. v3 merged the
+# former `Genomic_Variant_umbrella` into `other_molecular_biomarker_umbrella`
+# (a sequence variant is a biomarker finding with a nested `variant_detail`),
+# matching the production schema which folds variants into biomarkers.
+# `significant_findings` + `clinical_information` are optional for the
+# root-shape sanity check.
+_CORE_SECTIONS: frozenset[str] = frozenset(
+    {
+        "report_metadata",
+        "other_molecular_biomarker_umbrella",
+        "tested_biomarker_umbrella",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -125,25 +141,25 @@ class SchemaLoader:
         return cls(raw)
 
     def _validate_root_shape(self) -> None:
-        """Sanity-check the loaded schema matches our v2 expectations."""
+        """Sanity-check the loaded schema matches our v2/v3 expectations.
+
+        Accepts both schema versions: the 4 core sections must exist as
+        top-level object `properties`; `significant_findings` /
+        `clinical_information` (v3) are allowed but not required here, so a v2
+        file still loads. The authoritative section list is derived from
+        `properties` (see `list_sections`), not hardcoded.
+        """
         if self._root.get("title") != "genomic_pathology_extraction":
             raise SchemaLoadError(
                 "Schema root title is not 'genomic_pathology_extraction' — "
                 f"got {self._root.get('title')!r}",
                 retry_safe=False,
             )
-        required = set(self._root.get("required", []))
-        expected = {
-            "count_of_extracted_objects",
-            "report_metadata",
-            "Genomic_Variant_umbrella",
-            "other_molecular_biomarker_umbrella",
-            "tested_biomarker_umbrella",
-        }
-        missing = expected - required
+        properties = self._root.get("properties", {})
+        missing = _CORE_SECTIONS - set(properties)
         if missing:
             raise SchemaLoadError(
-                f"Schema root is missing required top-level sections: {sorted(missing)}",
+                f"Schema root is missing core top-level sections: {sorted(missing)}",
                 retry_safe=False,
             )
 
@@ -151,20 +167,22 @@ class SchemaLoader:
     # Public API
     # -----------------------------------------------------------------------
 
-    def list_sections(self) -> list[UmbrellaSection]:
-        """Return the 4 umbrella section names in schema order."""
-        return [
-            "report_metadata",
-            "Genomic_Variant_umbrella",
-            "other_molecular_biomarker_umbrella",
-            "tested_biomarker_umbrella",
-        ]
+    def list_sections(self) -> list[str]:
+        """Return the section names (top-level object `properties`) in schema
+        order. Derived from the schema, so adding a section to the JSON is
+        enough — no code change here. Scalar top-level keys (e.g.
+        `count_of_extracted_objects`) are excluded."""
+        out: list[str] = []
+        for name, subschema in self._root.get("properties", {}).items():
+            if isinstance(subschema, dict) and subschema.get("type") == "object":
+                out.append(name)
+        return out
 
     @trace("core.schema_loader.get_section")
-    def get_section(self, name: UmbrellaSection) -> SchemaSection:
-        """Return the SchemaSection for the named umbrella, generating its
+    def get_section(self, name: str) -> SchemaSection:
+        """Return the SchemaSection for the named section, generating its
         Pydantic model on first request."""
-        if name not in get_args(UmbrellaSection):
+        if name not in self.list_sections():
             raise SchemaLoadError(
                 f"Unknown schema section: {name!r}. Valid sections: {self.list_sections()}",
                 retry_safe=False,
@@ -184,7 +202,7 @@ class SchemaLoader:
         return section
 
     @trace("core.schema_loader.validate")
-    def validate(self, name: UmbrellaSection, candidate: dict[str, Any]) -> BaseModel:
+    def validate(self, name: str, candidate: dict[str, Any]) -> BaseModel:
         """Validate a candidate dict against the named section's Pydantic
         model. Raises SchemaValidationError with field-level details on
         failure; returns the parsed model on success."""
@@ -192,13 +210,45 @@ class SchemaLoader:
 
         section = self.get_section(name)
         try:
-            return section.pydantic_model.model_validate(candidate)
+            model = section.pydantic_model.model_validate(candidate)
         except ValidationError as exc:
             raise SchemaValidationError(
                 f"Schema validation failed for section {name!r}",
                 retry_safe=False,
                 context={"section": name, "errors": exc.errors()},
             ) from exc
+        # Normalize null arrays → [] in the raw payload, in place. The Pydantic
+        # types accept `null` for any array (the LLM emits null, not [], for an
+        # empty section), but the COMMITTED payload is the raw dict (extractor
+        # returns it verbatim to preserve fields), and downstream consumers
+        # iterate these arrays. Coalescing here means linker/scorer/UI always
+        # see a list. Schema-aware so only real array fields are touched.
+        if isinstance(candidate, dict):
+            self._coalesce_null_arrays(section.raw_json_schema, candidate)
+        return model
+
+    @staticmethod
+    def _coalesce_null_arrays(schema_node: Any, value: Any) -> Any:
+        """Recursively replace `null` with `[]` for fields the schema declares
+        as arrays. Mutates dicts/lists in place; returns the (possibly new)
+        value so callers can reassign array slots."""
+        if not isinstance(schema_node, dict):
+            return value
+        t = schema_node.get("type")
+        is_array = t == "array" or (isinstance(t, list) and "array" in t)
+        is_object = t == "object" or (isinstance(t, list) and "object" in t)
+        if is_array:
+            if value is None:
+                return []
+            if isinstance(value, list):
+                items = schema_node.get("items", {})
+                return [SchemaLoader._coalesce_null_arrays(items, v) for v in value]
+            return value
+        if is_object and isinstance(value, dict):
+            for key, sub in (schema_node.get("properties") or {}).items():
+                if key in value:
+                    value[key] = SchemaLoader._coalesce_null_arrays(sub, value[key])
+        return value
 
     def get_root_schema(self) -> dict[str, Any]:
         """Return the raw JSON Schema for use as Gemini `response_schema`."""
@@ -271,9 +321,14 @@ class SchemaLoader:
                 Field(default=default, description=fschema.get("description", "")),
             )
 
-        # Respect additionalProperties: false → forbid extras.
-        extra_policy = "forbid" if section_schema.get("additionalProperties") is False else "ignore"
-        model_config = ConfigDict(extra=extra_policy)  # type: ignore[arg-type]
+        # Tolerate extra keys at the Pydantic layer. LLM extractors routinely
+        # emit plausible-but-unmodelled keys (e.g. lymphovascular_invasion,
+        # page_number on a nested object); forbidding them turns a recoverable
+        # extraction into a hard crash. Hallucinated-key control is enforced
+        # separately by the envelope jsonschema verifier (advisory) and by the
+        # scorer (additionalProperties:false guards the GT comparison), so we
+        # do NOT need Pydantic to police the keyset here.
+        model_config = ConfigDict(extra="ignore")
 
         model = create_model(
             self._safe_model_name(model_name),
@@ -303,20 +358,30 @@ class SchemaLoader:
             return (base | None) if nullable else base
 
         if t == "array":
+            # Arrays are nullable. The LLM emits `null` (not `[]`) for a section
+            # that genuinely has no entries — e.g. a lymph-node specimen with no
+            # ancillary_studies_findings. A non-optional list[...] rejects that
+            # null and crashes a recoverable extraction. We accept null here;
+            # downstream scoring/normalization coalesces null → []. Genuine
+            # type errors (e.g. a string where a list is expected) still fail.
             items = field_schema.get("items", {})
             inner = self._jsonschema_to_python_type(parent_name, f"{field_name}_item", items)
-            return list[inner]  # type: ignore[valid-type]
+            return list[inner] | None  # type: ignore[valid-type]
 
         if t == "object":
+            # Nested objects are always nullable. A surgical-pathology
+            # specimen may legitimately have no lymph_node_details or
+            # pTNM_staging_details; the extractor emits null for those, and a
+            # non-optional nested model would reject null ("should be a dict").
             # Free-form object (no `properties` defined) → accept any dict.
             # Used for fields like `_provenance` where the keyset is dynamic
             # (one entry per emitted field) and shape validation happens
             # at a higher layer (jsonschema or a custom verifier).
             if not field_schema.get("properties"):
-                return dict[str, Any]
-            # Otherwise: recurse and generate a nested model.
+                return dict[str, Any] | None
+            # Otherwise: recurse and generate a nested model, wrapped Optional.
             nested_name = f"{parent_name}__{field_name}"
-            return self._build_pydantic_model(nested_name, field_schema)
+            return self._build_pydantic_model(nested_name, field_schema) | None
 
         if t in {"string", "integer", "number", "boolean"}:
             return self._primitive_type(t)

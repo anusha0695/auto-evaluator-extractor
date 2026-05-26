@@ -21,6 +21,7 @@ wheels/
 *.egg
 MANIFEST
 
+
 # ----- Virtual environments -----
 .venv/
 venv/
@@ -66,6 +67,7 @@ coverage.xml
 # Anything that holds real patient data should be excluded here.
 local_runs/
 local_artifacts/
+ground_truth/
 scratch/
 *.pdf.cache
 docai_response_*.json
@@ -74,9 +76,6 @@ docai_response_*.json
 !snapshots/
 !snapshots/**
 
-# ----- Ground truth (this IS committed — explicit allow) -----
-!ground_truth/
-!ground_truth/**
 
 # ----- Logs -----
 *.log
@@ -97,3 +96,37 @@ local_artifacts/
 
 # ----- Pyproject stub (file was deleted; leave the line in case anyone resurrects it) -----
 pyproject.toml
+
+# ----- Tooling scratch not covered above -----
+.Rhistory
+.benchmarks/
+pytest-cache-files-*/
+.ipynb_checkpoints/
+
+# ----- Local extraction dumps (generated; may contain PHI on real docs) -----
+# `process_local --json` and the scoring helper write extraction envelopes to
+# root by example. These are RUN OUTPUTS, not source — keep them in local_runs/
+# or leave them untracked. demo_v2.json is the example dump from the help text.
+/demo_v2.json
+/extraction_*.json
+/*_extraction.json
+
+# ----- Extractor debug dumps (verbatim failing payloads → PHI risk, local-only) -----
+**/_extractor_debug/
+
+# ----- Build-log history (superseded by docs/ — kept LOCAL, not committed) -----
+# These were the chronological implementation log. The maintained source of truth
+# is now docs/. Keep them locally for history; do not commit. (If you ever want
+# them versioned, move them under docs/history/ and remove these lines.)
+/MANIFEST_PHASE_1.md
+/MANIFEST_PHASE_2.md
+/MANIFEST_PHASE_3.md
+/PHASES.md
+/PHASE_1_PLAN.md
+/PHASE_2_PLAN.md
+/PHASE_2_GRANULAR_PLAN.md
+/PHASE_2_DETAILED_DESIGN.md
+/PHASE_2_COVERAGE_VS_PRODUCTION.md
+/PHASE_2_VMAW_TRIGGERS.md
+/PHASE_3_GAPS_AND_FIXES.md
+/PRODUCTION_MAPPING.md

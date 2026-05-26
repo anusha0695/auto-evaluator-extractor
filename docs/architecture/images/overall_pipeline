@@ -1,0 +1,42 @@
+digraph overall {
+	bgcolor=white fontname=Helvetica rankdir=TB
+	edge [color="#475569" fontname=Helvetica fontsize=9]
+	pdf [label=PDF color="#475569" fillcolor="#f1f5f9" fontname=Helvetica fontsize=10 shape=box style=filled]
+	dr [label=document_received color="#6366f1" fillcolor="#eef2ff" fontname=Helvetica fontsize=11 shape=box style="rounded,filled"]
+	pre [label="preprocess
+(DocAI · blocks · profiles · NER · geometry)" color="#6366f1" fillcolor="#eef2ff" fontname=Helvetica fontsize=11 shape=box style="rounded,filled"]
+	plan [label="planner
+(pick active teams)" color="#6366f1" fillcolor="#eef2ff" fontname=Helvetica fontsize=11 shape=box style="rounded,filled"]
+	teams [label="teams
+(5 specialist teams · agentic loop)" color="#6366f1" fillcolor="#eef2ff" fontname=Helvetica fontsize=11 shape=box style="rounded,filled"]
+	link [label="linker
+(assemble nested JSON + cross-links)" color="#6366f1" fillcolor="#eef2ff" fontname=Helvetica fontsize=11 shape=box style="rounded,filled"]
+	ver [label="verifiers
+(schema · coverage · recall · attribution
+· normalization · binding V1-V4)" color="#6366f1" fillcolor="#eef2ff" fontname=Helvetica fontsize=11 shape=box style="rounded,filled"]
+	tri [label="triage
+defects?" color="#ca8a04" fillcolor="#fef9c3" fontname=Helvetica fontsize=10 shape=diamond style=filled]
+	rep [label="repair
+(re-extract · reprofile · re-link
+· renormalize · drop_and_flag)" color="#6366f1" fillcolor="#eef2ff" fontname=Helvetica fontsize=11 shape=box style="rounded,filled"]
+	vmaw [label="VMAW
+(EC · CITE · VA)" color="#6366f1" fillcolor="#eef2ff" fontname=Helvetica fontsize=11 shape=box style="rounded,filled"]
+	dec [label="decision_router
+(auto_accept / partial_accept / sme_flag)" color="#6366f1" fillcolor="#eef2ff" fontname=Helvetica fontsize=11 shape=box style="rounded,filled"]
+	persist [label="persist
+(artifacts + SME queue + production)" color="#16a34a" fillcolor="#dcfce7" fontname=Helvetica fontsize=11 shape=box style="rounded,filled"]
+	pdf -> dr
+	dr -> pre
+	pre -> plan
+	plan -> teams
+	teams -> link
+	link -> ver
+	ver -> tri
+	tri -> rep [label="route = repair
+(addressable defects)" color="#ca8a04"]
+	rep -> link [label="re-verify" color="#ca8a04"]
+	tri -> vmaw [label="route = done
+(nothing addressable)" color="#16a34a"]
+	vmaw -> dec
+	dec -> persist
+}

@@ -122,3 +122,74 @@ tools:
         type: string
         required: true
         description: One of 'doc_profile', 'parser_hypothesis', 'block_profiles'.
+
+  # ---------------------------------------------------------------------------
+  # Phase 2 normalization tools — gene / variant / biomarker / quantity
+  # (handlers are stateless pure functions; offline; verbatim always preserved)
+  # ---------------------------------------------------------------------------
+
+  hgnc_normalize:
+    description: >
+      Canonicalize a gene symbol to its HGNC-approved form. Returns
+      {canonical, status (exact|fuzzy|ambiguous|unknown), fuzzy, candidates}.
+      Exact alias (HER2->ERBB2) is canonical; fuzzy=true is an OCR repair that
+      MUST be flagged in provenance (type:derived) with the original surface
+      kept; ambiguous => do NOT pick, leave for review.
+    handler: core.tool_registry.hgnc_normalize
+    input_schema:
+      symbol:
+        type: string
+        required: true
+        description: Gene symbol as printed (e.g. 'HER2', 'JAK-2').
+
+  hgvs_validate:
+    description: >
+      Validate an HGVS notation (offline, version-aware; never Postgres/API).
+      Returns {valid, normalized, accession, version, kind, backend}. Emit the
+      value only if valid; on invalid emit null rather than a guessed string.
+      Always preserves the transcript version integer (NM_004972.4 != .3).
+    handler: core.tool_registry.hgvs_validate
+    input_schema:
+      notation:
+        type: string
+        required: true
+        description: HGVS notation (e.g. 'NM_004972.4:c.1849G>T', 'p.V617F').
+
+  biomarker_normalize:
+    description: >
+      Canonicalize a non-gene biomarker name for the dedup key (PD-L1<->CD274).
+      Returns {canonical, matched}. Keep the verbatim surface separately.
+    handler: core.tool_registry.biomarker_normalize
+    input_schema:
+      name:
+        type: string
+        required: true
+        description: Non-gene biomarker name (e.g. 'PD-L1', 'TMB').
+
+  method_normalize:
+    description: >
+      Canonicalize an assay method for the dedup key (Immunohistochemistry->IHC).
+      Returns {canonical, matched}. Keep the verbatim surface separately.
+    handler: core.tool_registry.method_normalize
+    input_schema:
+      method:
+        type: string
+        required: true
+        description: Assay method as printed (e.g. 'Immunohistochemistry').
+
+  normalize_quantity:
+    description: >
+      Map a value (+optional unit) to a canonical numeric for the EQUIVALENCE
+      check only (VAF '12%'<->'0.12'; '2.3 cm'<->'23 mm'). Returns
+      {canonical_value, canonical_unit, kind}. Verbatim is always kept; an
+      unparseable value returns canonical_value=null (never repaired).
+    handler: core.tool_registry.normalize_quantity
+    input_schema:
+      value:
+        type: string
+        required: true
+        description: Value as printed (e.g. '12%', '2.3 cm').
+      unit:
+        type: string
+        required: false
+        description: Optional unit if separate from the value.

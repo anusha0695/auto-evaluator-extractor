@@ -62,7 +62,6 @@ GENERAL_MODELS: tuple[str, ...] = (
 
 TargetUmbrella = Literal[
     "report_metadata",
-    "Genomic_Variant_umbrella",
     "other_molecular_biomarker_umbrella",
     "tested_biomarker_umbrella",
 ]
@@ -70,7 +69,6 @@ TargetUmbrella = Literal[
 # Real umbrellas (excludes the sentinel "none" used by block hints).
 _REAL_UMBRELLAS = frozenset({
     "report_metadata",
-    "Genomic_Variant_umbrella",
     "other_molecular_biomarker_umbrella",
     "tested_biomarker_umbrella",
 })
@@ -382,10 +380,9 @@ class SciSpaCyMedicalNER:
         )
         logger.info(
             "medical_ner: doc_id=%s deterministic post-process → %d candidate(s) "
-            "(metadata=%d, variants=%d, biomarkers=%d, panel=%d) from %d raw, dropped=%d",
+            "(metadata=%d, biomarkers=%d, panel=%d) from %d raw, dropped=%d",
             doc_id, len(candidates),
             counts.get("report_metadata", 0),
-            counts.get("Genomic_Variant_umbrella", 0),
             counts.get("other_molecular_biomarker_umbrella", 0),
             counts.get("tested_biomarker_umbrella", 0),
             len(raw_entities), dropped_count,

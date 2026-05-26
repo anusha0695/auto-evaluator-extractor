@@ -1,0 +1,91 @@
+{# =============================================================================
+   TestedBiomarkerTeam — team-specific prompt.
+
+   Layered on config/prompts/system/extractor.j2 via {% include %}. The base
+   gives the schema-driven field contract (rendered from
+   tested_biomarker_umbrella in genomic_pathology_v3.json), the recall mandate,
+   the object-vs-array note, the ReAct format, the tool list, and the output
+   format. This file adds the panel-membership rules.
+
+   Jinja context (same as extractor.j2):
+     team_name = "TestedBiomarkerTeam"
+     schema_section_name = "tested_biomarker_umbrella"
+     schema_section_description, fields, available_tools, parser_hypothesis_count
+     pipeline_version
+   ============================================================================= #}
+{% include 'system/extractor.j2' %}
+
+---
+
+# TestedBiomarkerTeam rules — `tested_biomarker_umbrella`
+
+This section answers "**what was tested**" — the full panel of genes/biomarkers
+that were assayed, whether or not a variant was found. Emit the umbrella object
+with `count_of_tested_biomarkers`, `page_numbers` (pages where the panel grid
+appears), `llm_confidence_score`, and `tested_biomarkers` (a flat, deduplicated,
+**alphabetized** array of strings).
+
+## 1. What to include
+
+- Every gene / biomarker named as part of the panel, analysis, or coverage list
+  — even when its result is "no variant detected" or it never appears again.
+- This is the broadest recall surface in the document: panel grids, "genes
+  analyzed" appendices, coverage tables, methodology gene lists. Read them all
+  (recall mandate) — the parser hypothesis seed will undercount panel lists.
+
+## 2. What to EXCLUDE
+
+- **Testing methods are not biomarkers.** Never list `NGS`, `MSI` (as a method),
+  `FISH`, `IHC`, `Sanger`, `PCR`, `Sequencing` as panel members.
+- Non-gene QC/coverage rows (e.g. "mean coverage", "tumor purity") are not
+  tested biomarkers.
+- Do not duplicate a gene that appears in both a results table and the panel
+  appendix — `tested_biomarkers` is a **set**.
+
+## 3. Normalization + dedup
+
+- **List the GENE, not the specific variant.** The panel entry is the gene that
+  was tested — `JAK2`, not `JAK2 V617F`; `BRAF`, not `BRAF V600E`. Strip the
+  variant/mutation suffix to the bare gene symbol. So a "JAK2 V617F Mutation
+  Analysis" contributes exactly one panel entry: `JAK2`.
+- Use HGNC-preferred symbols where applicable (call `hgnc_normalize` if it's in
+  your tool list). After normalization, dedup case-insensitively, then sort
+  alphabetically (A→Z) for a stable, comparable list.
+- A biomarker tested under an alias and its canonical form collapse to one entry
+  (HER2/ERBB2 → `ERBB2`); a gene and its variant collapse to the gene
+  (`JAK2` + `JAK2 V617F` → `JAK2`).
+
+## 4. `count_of_tested_biomarkers` and `page_numbers`
+
+- `count_of_tested_biomarkers` = length of the deduped `tested_biomarkers` array.
+- `page_numbers` = DERIVED sorted list of the pages where the panel/grid appears
+  (from tool-result blocks).
+
+## 4b. `biomarkers_tested_no_result` — tested but NO definitive result
+
+Production-parity. Separate from `tested_biomarkers` (which is the with-result
+panel), capture biomarkers that were **tested but returned no definitive
+result**, each as an object `{name, reason, details}`:
+- `name` — the biomarker/gene (NOT a method).
+- `reason` — why no result: `"QNS"` (quantity not sufficient), `"Pending"`,
+  `"Indeterminate"`, `"Equivocal"`, `"Not reported"`.
+- `details` — any extra note, else null.
+Emit `[]` when every tested biomarker has a result (the JAK2 demo → `[]`).
+
+**Mutually exclusive — a biomarker belongs to exactly ONE list.** If a
+biomarker yielded no usable result (QNS / Pending / Indeterminate / Equivocal /
+Not reported), it goes in `biomarkers_tested_no_result` and must NOT also appear
+in `tested_biomarkers`. `tested_biomarkers` is the with-result panel only. Note
+the boundary: "negative" / "not detected" / "no variant" / "wild type" IS a
+definitive result → `tested_biomarkers`; only the absence of a result (the
+reasons above) routes a biomarker to `biomarkers_tested_no_result`.
+
+## 5. `llm_confidence_score`
+
+Top-level float in [0.0, 1.0] for the section. A panel grid read cleanly →
+0.9+; a list reconstructed from scattered methodology prose → lower.
+
+---
+
+Now run the ReAct loop and produce the `tested_biomarker_umbrella` object with a
+deduplicated, alphabetized `tested_biomarkers` array.

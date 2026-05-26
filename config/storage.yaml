@@ -34,7 +34,31 @@ phase_1:
   input_gcs_bucket: patient_clinical_trial
   input_gcs_prefix: patient_profiles/
 
-# Phase 2+ entries will be appended below as those phases ship.
-# phase_2: { ... }
+phase_2:
+  pipeline_version: v2
+
+  # ----- Local persistence (PERSISTENCE_BACKEND=local) — same dir as phase 1;
+  # runs/extractions are tagged by pipeline_version so they don't collide.
+  local_persistence_dir: local_runs
+
+  # ----- GCS artifacts (PERSISTENCE_BACKEND=bigquery) -----
+  artifacts_gcs_bucket: patient_clinical_trial
+  artifacts_gcs_prefix: extraction_outputs/phase2/
+
+  # ----- BigQuery tables (v2 schema: full envelope incl. genomic + clinical).
+  bigquery_project:           medical-report-extraction
+  bigquery_dataset:           extractor_dev
+  bigquery_extractions_table: extractions_v2
+  bigquery_runs_table:        runs_v2
+
+  # ----- Firestore checkpointer for LangGraph v2 state.
+  firestore_database:              "(default)"
+  firestore_checkpoint_collection: langgraph_checkpoints_phase2
+
+  # ----- Input bucket the runner reads from (when --list-bucket is used).
+  input_gcs_bucket: patient_clinical_trial
+  input_gcs_prefix: patient_profiles/
+
+# Phase 3+ entries will be appended below as those phases ship.
 # phase_3: { ... }
 # phase_4: { ... }

@@ -98,6 +98,17 @@ def build_tools_for_state(
         tools.append(_make_schema_validate(schema_loader))
     if "state_read" in allowed:
         tools.append(_make_state_read(state))
+    # ----- Phase 2 normalization tools (stateless) -------------------------
+    if "hgnc_normalize" in allowed:
+        tools.append(_make_hgnc_normalize())
+    if "hgvs_validate" in allowed:
+        tools.append(_make_hgvs_validate())
+    if "biomarker_normalize" in allowed:
+        tools.append(_make_biomarker_normalize())
+    if "method_normalize" in allowed:
+        tools.append(_make_method_normalize())
+    if "normalize_quantity" in allowed:
+        tools.append(_make_normalize_quantity())
 
     return tools
 
@@ -110,6 +121,12 @@ _ALL_TOOL_NAMES: set[str] = {
     "date_parser",
     "schema_validate",
     "state_read",
+    # Phase 2 normalization tools:
+    "hgnc_normalize",
+    "hgvs_validate",
+    "biomarker_normalize",
+    "method_normalize",
+    "normalize_quantity",
 }
 
 
@@ -149,6 +166,27 @@ class SchemaValidateInput(BaseModel):
 
 class StateReadInput(BaseModel):
     key: str = Field(..., description="One of 'doc_profile', 'parser_hypothesis', 'block_profiles'.")
+
+
+class HgncNormalizeInput(BaseModel):
+    symbol: str = Field(..., min_length=1, description="Gene symbol as printed (e.g. 'HER2', 'JAK-2').")
+
+
+class HgvsValidateInput(BaseModel):
+    notation: str = Field(..., min_length=1, description="HGVS notation (e.g. 'NM_004972.4:c.1849G>T', 'p.V617F').")
+
+
+class BiomarkerNormalizeInput(BaseModel):
+    name: str = Field(..., min_length=1, description="Non-gene biomarker name (e.g. 'PD-L1', 'Immunohistochemistry-... no'). ")
+
+
+class MethodNormalizeInput(BaseModel):
+    method: str = Field(..., min_length=1, description="Assay method as printed (e.g. 'Immunohistochemistry').")
+
+
+class NormalizeQuantityInput(BaseModel):
+    value: str = Field(..., min_length=1, description="Value as printed (e.g. '12%', '2.3 cm').")
+    unit: str | None = Field(None, description="Optional unit if separate from the value.")
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +427,103 @@ def _make_state_read(state: PipelineState) -> StructuredTool:
             "'parser_hypothesis', 'block_profiles'."
         ),
         args_schema=StateReadInput,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 normalization tool factories (stateless — pure functions)
+# ---------------------------------------------------------------------------
+
+
+def _make_hgnc_normalize() -> StructuredTool:
+    @trace("core.tool_registry.hgnc_normalize")
+    def _handler(symbol: str) -> dict[str, Any]:
+        from preprocess.hgnc_resolver import hgnc_normalize
+        return hgnc_normalize(symbol)
+
+    return StructuredTool.from_function(
+        func=_handler,
+        name="hgnc_normalize",
+        description=(
+            "Canonicalize a gene symbol to its HGNC-approved form. Returns "
+            "{canonical, status (exact|fuzzy|ambiguous|unknown), fuzzy, candidates}. "
+            "An exact alias (HER2→ERBB2) is canonical; a `fuzzy:true` result is an "
+            "OCR repair you MUST flag in provenance (type:derived) while keeping the "
+            "original surface; `ambiguous` means do NOT pick — leave it for review."
+        ),
+        args_schema=HgncNormalizeInput,
+    )
+
+
+def _make_hgvs_validate() -> StructuredTool:
+    @trace("core.tool_registry.hgvs_validate")
+    def _handler(notation: str) -> dict[str, Any]:
+        from preprocess.hgvs_validate import hgvs_validate
+        return hgvs_validate(notation)
+
+    return StructuredTool.from_function(
+        func=_handler,
+        name="hgvs_validate",
+        description=(
+            "Validate an HGVS notation (offline, version-aware). Returns "
+            "{valid, normalized, accession, version, kind, backend}. Emit the value "
+            "only if valid; on invalid emit null rather than a malformed/guessed "
+            "string. Always preserves the transcript version integer."
+        ),
+        args_schema=HgvsValidateInput,
+    )
+
+
+def _make_biomarker_normalize() -> StructuredTool:
+    @trace("core.tool_registry.biomarker_normalize")
+    def _handler(name: str) -> dict[str, Any]:
+        from preprocess.normalizers import biomarker_normalize
+        return biomarker_normalize(name)
+
+    return StructuredTool.from_function(
+        func=_handler,
+        name="biomarker_normalize",
+        description=(
+            "Canonicalize a non-gene biomarker name for the dedup key (PD-L1↔CD274). "
+            "Returns {canonical, matched}. Keep the verbatim surface separately."
+        ),
+        args_schema=BiomarkerNormalizeInput,
+    )
+
+
+def _make_method_normalize() -> StructuredTool:
+    @trace("core.tool_registry.method_normalize")
+    def _handler(method: str) -> dict[str, Any]:
+        from preprocess.normalizers import method_normalize
+        return method_normalize(method)
+
+    return StructuredTool.from_function(
+        func=_handler,
+        name="method_normalize",
+        description=(
+            "Canonicalize an assay method for the dedup key (Immunohistochemistry→IHC). "
+            "Returns {canonical, matched}. Keep the verbatim surface separately."
+        ),
+        args_schema=MethodNormalizeInput,
+    )
+
+
+def _make_normalize_quantity() -> StructuredTool:
+    @trace("core.tool_registry.normalize_quantity")
+    def _handler(value: str, unit: str | None = None) -> dict[str, Any]:
+        from preprocess.normalizers import normalize_quantity
+        return normalize_quantity(value, unit)
+
+    return StructuredTool.from_function(
+        func=_handler,
+        name="normalize_quantity",
+        description=(
+            "Map a value (+optional unit) to a canonical numeric for the EQUIVALENCE "
+            "check only (VAF '12%'↔'0.12'; '2.3 cm'↔'23 mm'). Returns "
+            "{canonical_value, canonical_unit, kind}. The verbatim string is always "
+            "kept; an unparseable value returns canonical_value=null (never repaired)."
+        ),
+        args_schema=NormalizeQuantityInput,
     )
 
 

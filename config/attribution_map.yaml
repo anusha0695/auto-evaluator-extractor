@@ -1,0 +1,46 @@
+# =============================================================================
+# Attribution map (P3-M10b) — owner-keyed attribution targets.
+# =============================================================================
+# Every array-of-objects in OUR v3 envelope whose attributes must attach to an
+# owner. The AttributionVerifier walks each `array_keys` path, and for every
+# object verifies its `attributes` against the object's `owner_key` (anchored on
+# the key's value, or on POSITION when the key is null — a null owner_key is NEVER
+# itself flagged here; recall_floor owns "expected id missing"). The semantic
+# check is the injected attribution hook; offline (gate) it emits advisory
+# candidates. Multiplicity (≥2 sibling objects) raises scrutiny, it does not gate
+# whether the check runs (locked decision: always check, even single-owner).
+#
+# array_keys = the ordered ARRAY keys to descend from the section, e.g.
+#   [specimen_findings, specimen] → section.specimen_findings[i].specimen[j]
+# =============================================================================
+
+attribution_targets:
+  - name: specimen_attributes
+    section: significant_findings
+    array_keys: [specimen_findings, specimen]
+    owner_key: specimen_id
+    attributes: [tissue_type, description, tissue_site, laterality]
+
+  - name: histologic_interpretation
+    section: significant_findings
+    array_keys: [specimen_findings, histologic_findings]
+    owner_key: finding
+    attributes: [interpretation]
+
+  - name: ancillary_interpretation
+    section: significant_findings
+    array_keys: [specimen_findings, ancillary_studies_findings]
+    owner_key: ancillary_finding
+    attributes: [interpretation]
+
+  - name: biomarker_finding_attributes
+    section: other_molecular_biomarker_umbrella
+    array_keys: [other_molecular_biomarkers, findings]
+    owner_key: result
+    attributes: [method, details, interpretation]
+
+  - name: tested_no_result_attributes
+    section: tested_biomarker_umbrella
+    array_keys: [biomarkers_tested_no_result]
+    owner_key: name
+    attributes: [reason, details]

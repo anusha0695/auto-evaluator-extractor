@@ -1,0 +1,34 @@
+# Non-gene biomarker synonyms → canonical biomarker label. Used by
+# biomarker_normalize for the dedup identity key. Match is case-insensitive;
+# the verbatim surface is always preserved separately. (Gene symbols are
+# handled by hgnc_resolver, not here.)
+biomarkers:
+  PD-L1:
+    - pdl1
+    - pd l1
+    - cd274
+    - programmed death-ligand 1
+  MSI:
+    - microsatellite instability
+    - msi status
+  TMB:
+    - tumor mutational burden
+    - tumor mutation burden
+    - mutational burden
+  HRD:
+    - homologous recombination deficiency
+    - hrd score
+  HER2:
+    - her2/neu
+    - her-2
+    - her2 neu
+    - erbb2 (ihc)
+  ER:
+    - estrogen receptor
+  PR:
+    - progesterone receptor
+  Ki-67:
+    - ki67
+    - mib-1
+    - mib1
+    - mki67

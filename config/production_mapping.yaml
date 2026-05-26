@@ -1,0 +1,161 @@
+# =============================================================================
+# Production-schema field map (P3-M9)  —  production field  ←  OUR output field
+# =============================================================================
+# Target = production_schema_v3.json (`pathology_extraction` root).
+# Source = our v3 envelope (extraction_v2.json / extraction_reviewed.json).
+#
+# HOW THIS FILE IS USED:
+#   • `administrative_info:` is MACHINE-READ by transform/to_production.py (the
+#     flat→nested renames are driven from here — edit to retune).
+#   • the other four sections document the mapping that to_production.py implements:
+#       - significant_findings + clinical_information are 1:1 IDENTITY (our 2a/2b
+#         schema uses the SAME field names as production), copied field-for-field
+#         with our internal-only keys stripped (provenance / needs_review / occurrences).
+#       - the two biomarker sections are TRANSFORMS (filter / flatten / fold / derive),
+#         annotated with `_transform:` notes.
+# Notation:  prod_field: our.source.path     ·     `[]` = per-array-item
+# =============================================================================
+
+administrative_info:                         # ← report_metadata.*   (MACHINE-READ)
+  total_pages: total_pages
+  report_title: report_title
+  report_type: Report_Type
+  report_date: Report_Date
+  specimen_collection_date: Collection_Date
+  received_date: Received_Date
+  vendor_name: Vendor_Name
+  accession_number: Accession_Number
+  signing_pathologist: Signing_Pathologist
+  patient_info:
+    patient_first_name: Patient_First_Name
+    patient_last_name: Patient_Last_Name
+    patient_dob: Patient_DOB
+    mrn: Patient_MRN
+  ordering_provider:
+    first_name: Ordering_Provider_First_Name
+    last_name: Ordering_Provider_Last_Name
+    title: Ordering_Provider_Title
+    npi: Ordering_Provider_NPI
+    phone: Ordering_Provider_Phone
+    addition_provider_name: Additional_Provider_Name
+  practice:
+    name: Practice_Name
+    npi: Practice_NPI
+    address_line_1: Practice_Street_Address_1
+    address_line_2: Practice_Street_Address_2
+    city: Practice_City
+    state: Practice_State
+    zip_5: Practice_ZIP_5digit
+    zip_4: Practice_ZIP_4digit
+  _extra:                                    # Decision B: kept, clearly non-production
+    test_name: Test_Name
+    procedure: Procedure
+    section_llm_confidence_score: llm_confidence_score
+
+# -----------------------------------------------------------------------------
+significant_findings:                        # ← significant_findings   (1:1 IDENTITY, doc-only)
+  _transform: "copy specimen_findings[] field-for-field; drop section count_of_specimen_findings + section llm_confidence_score; strip provenance/needs_review/review_reason from each record"
+  specimen_findings:
+    "[]":
+      specimen:
+        "[]":
+          specimen_id: specimen[].specimen_id
+          tissue_type: specimen[].tissue_type
+          description: specimen[].description
+          tissue_site: specimen[].tissue_site
+          laterality: specimen[].laterality
+          page_number: specimen[].page_number
+          llm_confidence_score: specimen[].llm_confidence_score
+      procedure_details:
+        procedure: procedure_details.procedure
+        specimen_count: procedure_details.specimen_count
+        page_number: procedure_details.page_number
+        llm_confidence_score: procedure_details.llm_confidence_score
+      gross_description:
+        text: gross_description.text
+        page_number: gross_description.page_number
+        llm_confidence_score: gross_description.llm_confidence_score
+      microscopic_description:
+        text: microscopic_description.text
+        page_number: microscopic_description.page_number
+        llm_confidence_score: microscopic_description.llm_confidence_score
+      histologic_findings:
+        "[]":
+          finding: histologic_findings[].finding
+          interpretation: histologic_findings[].interpretation
+          page_number: histologic_findings[].page_number
+          llm_confidence_score: histologic_findings[].llm_confidence_score
+      ancillary_studies_findings:
+        "[]":
+          ancillary_finding: ancillary_studies_findings[].ancillary_finding
+          interpretation: ancillary_studies_findings[].interpretation
+          page_number: ancillary_studies_findings[].page_number
+          llm_confidence_score: ancillary_studies_findings[].llm_confidence_score
+      morphology_findings:
+        nuclear_grade: morphology_findings.nuclear_grade
+        growth_pattern: morphology_findings.growth_pattern
+        size: morphology_findings.size
+        necrosis: morphology_findings.necrosis
+        calcifications: morphology_findings.calcifications
+        tumor_extent: morphology_findings.tumor_extent
+      pTNM_staging_details:
+        pTNM_stage: pTNM_staging_details.pTNM_stage
+        staging_system_version: pTNM_staging_details.staging_system_version
+        page_number: pTNM_staging_details.page_number
+        llm_confidence_score: pTNM_staging_details.llm_confidence_score
+      lymph_node_details:
+        lymph_node_status: lymph_node_details.lymph_node_status
+        number_of_lymph_nodes_examined: lymph_node_details.number_of_lymph_nodes_examined
+        number_of_lymph_nodes_positive: lymph_node_details.number_of_lymph_nodes_positive
+        text: lymph_node_details.text
+        page_number: lymph_node_details.page_number
+        llm_confidence_score: lymph_node_details.llm_confidence_score
+
+# -----------------------------------------------------------------------------
+clinical_information:                        # ← clinical_information   (1:1 IDENTITY, doc-only)
+  _transform: "copy field-for-field; strip provenance"
+  page_number: page_number
+  llm_confidence_score: llm_confidence_score
+  number_of_clinical_histories: number_of_clinical_histories
+  clinical_history:
+    "[]":
+      pre_operative_diagnosis: clinical_history[].pre_operative_diagnosis
+  reason_for_study: reason_for_study
+  clinical_finding_details: clinical_finding_details
+
+# -----------------------------------------------------------------------------
+pathology_biomarkers_findings:               # ← other_molecular_biomarker_umbrella   (TRANSFORM, doc-only)
+  _transform: "INCLUDE a biomarker iff it has >=1 finding with a non-null result (Decision C). Flatten each finding to the 4 production keys. Derive counts/pages."
+  page_numbers: "DERIVED — sorted-unique page ints of included biomarkers, joined as a string e.g. '1, 2'"
+  llm_confidence_score: other_molecular_biomarker_umbrella.llm_confidence_score
+  number_of_biomarkers_with_definitive_results: "DERIVED — count of included biomarkers"
+  pathology_biomarkers:
+    "[]":
+      page_number: other_molecular_biomarkers[].page_number
+      biomarker_name: other_molecular_biomarkers[].biomarker_name
+      findings:
+        "[]":
+          result: other_molecular_biomarkers[].findings[].result
+          method: other_molecular_biomarkers[].findings[].method
+          interpretation: "other_molecular_biomarkers[].findings[].assertion  (fallback → findings[].interpretation when assertion is null)"
+          details: "other_molecular_biomarkers[].findings[].details  +  FOLDED variant_detail (Decision D: append amino_acid_change, coding/genomic HGVS, exon, VAF, clinical_significance, genomic_source_class, allelic_state)"
+  _dropped: "biomarker_class, specimen_id, method_source_type, reference_range, occurrences, provenance, page_number(per-finding), variant_detail(folded into details)  [assertion now maps to interpretation]"
+
+# -----------------------------------------------------------------------------
+pathology_biomarkers_mentioned:              # ← tested_biomarker_umbrella   (TRANSFORM, doc-only)
+  biomarkers_tested_with_result:
+    page_numbers: "DERIVED — tested_biomarker_umbrella.page_numbers (int list) joined as string"
+    llm_confidence_score: tested_biomarker_umbrella.llm_confidence_score
+    number_of_biomarkers_tested_with_result: "DERIVED — len(tested_biomarkers)"
+    biomarkers_tested_with_result:
+      "[]":
+        biomarker_name: "tested_biomarker_umbrella.tested_biomarkers[]  (string → {biomarker_name: s})"
+  biomarkers_tested_no_result:
+    page_numbers: "null (no source)"
+    llm_confidence_score: tested_biomarker_umbrella.llm_confidence_score
+    number_of_biomarkers_tested_no_result: "DERIVED — len(biomarkers_tested_no_result)"
+    biomarkers_tested_no_results:
+      "[]":
+        name: tested_biomarker_umbrella.biomarkers_tested_no_result[].name
+        reason: tested_biomarker_umbrella.biomarkers_tested_no_result[].reason
+        details: tested_biomarker_umbrella.biomarkers_tested_no_result[].details
