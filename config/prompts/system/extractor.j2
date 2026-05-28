@@ -117,12 +117,12 @@ Final Answer: <single JSON object matching {{ schema_section_name }}'s schema>
 - **`{{ tool.name }}`** — {{ tool.description }}
 {% endfor %}
 
-## Reasoning trace — required even on single-shot extractions
+## Reasoning trace — RECOMMENDED (not required)
 
-Before your `Final Answer`, emit a brief reasoning block in `<reasoning>` tags
-that records WHAT you found and WHY each populated field has the value it does.
-This is required even when you do not call any tools — it gives the downstream
-SME-review UI a visible thought process for this extraction. Keep it tight:
+When you have spare attention/tokens — which is the common case — emit a brief
+reasoning block in `<reasoning>` tags BEFORE your `Final Answer`. The SME-review
+UI surfaces this block verbatim as "section reasoning", so it's the cheapest way
+to make your extraction auditable. Keep it tight:
 
 ```
 <reasoning>
@@ -135,18 +135,32 @@ SME-review UI a visible thought process for this extraction. Keep it tight:
 </reasoning>
 ```
 
-Then on the NEXT line emit the JSON object. The reasoning block is parsed off
-the response; only the JSON is fed to the validator. Do not skip this block —
-the trace shows the SME exactly which line(s) of source text drove each value,
-and downstream agents (Coverage Auditor, Arbiter) read your reasoning to decide
-whether to accept or re-extract.
+**Skip the reasoning block ONLY when**: the source is unusually long and adding
+the block would compromise your ability to emit complete, correct JSON. The JSON
+object is what matters; the reasoning is a quality-of-trace nicety. **Never**
+emit the reasoning block AND skip the JSON — that's the one failure mode that
+breaks downstream.
 
-## Output format
-Your `Final Answer` MUST be a single JSON object with exactly the keys listed
-in the field contract above, and nothing else (the `<reasoning>` block above
-sits OUTSIDE the JSON — do not put it inside the object). Do not wrap the JSON
-in markdown fences. The format is: the `<reasoning>...</reasoning>` block, a
-newline, then the raw JSON object.
+If you emit `<reasoning>`, put it BEFORE the JSON (outside the JSON object — do
+not put it inside as a field). The block is parsed off the response; only the
+JSON is fed to the validator.
+
+## Output format — what is ACTUALLY required
+
+The ONLY thing your final response MUST contain is a single JSON object matching
+the schema for `{{ schema_section_name }}` — exactly the keys listed in the field
+contract above, nothing more.
+
+Acceptable shapes (in order of preference):
+
+1. `<reasoning>...</reasoning>\n{...JSON...}` — preferred when you have capacity.
+2. `{...JSON...}` — acceptable when you don't.
+
+Do not wrap the JSON in markdown fences. Do not preface the JSON with prose
+other than the `<reasoning>` block. Do not return an empty response. If you ran
+out of attention before you finished thinking, emit your best JSON guess and
+omit the reasoning block — partial reasoning never; partial JSON never; JSON
+alone is fine.
 
 Include a top-level `llm_confidence_score` in [0.0, 1.0] reflecting your
 confidence that this object is correct end-to-end (not per-field). The
