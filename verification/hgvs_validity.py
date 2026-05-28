@@ -32,15 +32,35 @@ FIELD_PREFIX = {
 _HAS_PREFIX = re.compile(r"^\s*(?:[A-Za-z0-9_.()-]+:)?[cgmnrp]\.", re.IGNORECASE)
 
 
-def hgvs_field_valid(leaf: str, value: str) -> bool:
-    """True if `value` is structurally valid HGVS for field `leaf` — retrying with the
-    field-appropriate prefix when the printed value omits it (legitimate per the schema)."""
+def hgvs_field_valid(leaf: str, value: str, record: dict[str, Any] | None = None) -> bool:
+    """True if `value` is structurally valid HGVS for field `leaf`.
+
+    Order of trust:
+      1. If `record.hgvs_normalized.valid` is True (the extractor already called
+         `hgvs_validate` during extraction and the tool said valid), accept it —
+         no re-check. This avoids re-running the same validator on the same value
+         and dodging a downstream invalid_hgvs → VMAW → SME round-trip when the
+         agent already did the work.
+      2. Otherwise, run `hgvs_validate` against the value as-is.
+      3. If that fails AND the printed value lacks the field's prefix (c./g./p.),
+         retry once with the prefix. Per the v4 schema, "1849G>T" verbatim is
+         legitimate; the verifier just needs to confirm it parses as c.1849G>T.
+
+    Only when ALL of the above fail is the value considered genuinely malformed.
+    """
+    # (1) Trust the agent's own tool result when present.
+    norm = (record or {}).get("hgvs_normalized") if isinstance(record, dict) else None
+    if isinstance(norm, dict) and norm.get("valid") is True:
+        return True
+
     from preprocess.hgvs_validate import hgvs_validate
     raw = (value or "").strip()
     if not raw:
         return True  # empty/null is not 'malformed' — absence, handled elsewhere
+    # (2) try as-is
     if hgvs_validate(raw).get("valid"):
         return True
+    # (3) prefix retry
     pref = FIELD_PREFIX.get(leaf)
     if pref and not _HAS_PREFIX.match(raw):
         return bool(hgvs_validate(f"{pref}.{raw}").get("valid"))
@@ -48,7 +68,10 @@ def hgvs_field_valid(leaf: str, value: str) -> bool:
 
 
 def _walk(obj: Any, ref: str):
-    """Yield (ref, leaf, value) for every populated HGVS leaf anywhere in the envelope."""
+    """Yield (ref, leaf, value, record) for every populated HGVS leaf anywhere in
+    the envelope. `record` is the IMMEDIATE parent dict of the leaf — so
+    `record["hgvs_normalized"]` (if present) is the sibling the agent stored its
+    own validation result in."""
     if isinstance(obj, dict):
         for k, v in obj.items():
             if k == "occurrences":
@@ -57,7 +80,7 @@ def _walk(obj: Any, ref: str):
             if isinstance(v, (dict, list)):
                 yield from _walk(v, cref)
             elif k in FIELD_PREFIX and isinstance(v, str) and v.strip():
-                yield cref, k, v
+                yield cref, k, v, obj
     elif isinstance(obj, list):
         for i, v in enumerate(obj):
             if isinstance(v, (dict, list)):
@@ -66,13 +89,14 @@ def _walk(obj: Any, ref: str):
 
 def find_malformed_hgvs(envelope: dict[str, Any]) -> list[dict[str, Any]]:
     """Every populated HGVS leaf that is genuinely malformed (fails even after a
-    prefix retry). Each entry routes to needs_review / escalate — NEVER renormalize
-    (there is no canonical to write)."""
+    prefix retry AND the agent's own hgvs_normalized.valid is not True). Each
+    entry routes to needs_review / escalate — NEVER renormalize (there is no
+    canonical to write)."""
     out: list[dict[str, Any]] = []
     for sec, payload in (envelope or {}).items():
         if isinstance(payload, (dict, list)):
-            for ref, leaf, value in _walk(payload, sec):
-                if not hgvs_field_valid(leaf, value):
+            for ref, leaf, value, record in _walk(payload, sec):
+                if not hgvs_field_valid(leaf, value, record=record):
                     out.append({"ref": ref, "field_name": ref, "leaf": leaf,
                                 "value": value, "status": "invalid_hgvs"})
     return out
