@@ -1,0 +1,370 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://medical-report-extraction/schemas/genomic_pathology_v4.json",
+  "title": "genomic_pathology_extraction",
+  "schema_version": 4,
+  "description": "Schema v4 — aligns to the mCODE genomic_pathology_extraction v2 production prompt. Changes vs v3: (a) Genomic_Variant_umbrella is RE-INTRODUCED as a separate top-level section (un-merges the v3 'variant_detail nested in biomarker' design); (b) other_molecular_biomarker_umbrella is FLATTENED to one record per biomarker {page_number, biomarker_name, method, result, reference_range, interpretation} — no findings[]/occurrences[]/variant_detail/biomarker_class; (c) significant_findings + clinical_information are kept (v3 shapes) but are OPTIONAL — disabled by default via the per-team `enabled` flag in config/teams.yaml (D3), revivable without schema change; (d) report_metadata keeps the 5 internal-only extra fields (D4) which to_production drops. Output is wrapped under the top key 'genomic_pathology_extraction'. Field-level VERBATIM vs DERIVED semantics live in 'extraction_mode'; multi-fragment concatenations use the ' | ' (space-pipe-space) separator; missing = JSON null. Consumed by core/schema_loader.py which does NOT resolve $ref — every shape is inlined on purpose.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "count_of_extracted_objects",
+    "report_metadata",
+    "Genomic_Variant_umbrella",
+    "other_molecular_biomarker_umbrella",
+    "tested_biomarker_umbrella"
+  ],
+  "properties": {
+    "count_of_extracted_objects": {
+      "type": "integer",
+      "minimum": 0,
+      "extraction_mode": "DERIVED",
+      "description": "Number of top-level umbrella sections containing at least one extracted item (report_metadata always counts as 1; +1 per umbrella with count > 0)."
+    },
+
+    "report_metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_pages",
+        "report_title",
+        "llm_confidence_score",
+        "Patient_MRN",
+        "Patient_First_Name",
+        "Patient_Last_Name",
+        "Patient_DOB",
+        "Vendor_Name",
+        "Collection_Date",
+        "Received_Date",
+        "Report_Date",
+        "Test_Name",
+        "Procedure",
+        "Ordering_Provider_First_Name",
+        "Ordering_Provider_Last_Name",
+        "Ordering_Provider_NPI",
+        "Ordering_Provider_Title",
+        "Practice_Name",
+        "Practice_NPI",
+        "Practice_Street_Address_1",
+        "Practice_Street_Address_2",
+        "Practice_City",
+        "Practice_State",
+        "Practice_ZIP_5digit",
+        "Practice_ZIP_4digit"
+      ],
+      "properties": {
+        "provenance":             { "type": ["array","object","null"], "extraction_mode": "DERIVED", "description": "Per-field provenance. PREFERRED an ARRAY of [{field_name, block_id, page, type ('verbatim'|'inferred'|'derived'|'absent'), rationale}] — one entry per emitted field. (Legacy field_name->entry map also accepted.) Powers the UI block explorer + the SME trace's per-field reasoning." },
+        "total_pages":            { "type": "integer", "minimum": 1, "extraction_mode": "DERIVED", "description": "Number of pages in the source PDF (from page count, not report text)." },
+        "report_title":           { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Report title / header banner literally as printed." },
+        "llm_confidence_score":   { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED", "description": "Model self-reported confidence for this section, 0.0-1.0." },
+
+        "Patient_MRN":            { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Patient Medical Record Number. STRICT: only when the source label is literally 'MRN', 'Medical Record #', or 'Med Rec #'. NOT Accession Number, Case Number, ID #, 'Your No', or Specimen ID." },
+        "Patient_First_Name":     { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+        "Patient_Last_Name":      { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+        "Patient_DOB":            { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Date of birth, in the exact format shown in the report." },
+
+        "Vendor_Name":            { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Lab vendor that generated the report (NeoGenomics, Tempus, Foundation Medicine, Caris, ...). May be inferred from product markers when not explicitly named." },
+
+        "Collection_Date":        { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Specimen collection date, in the exact format shown." },
+        "Received_Date":          { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Date the specimen was received by the vendor/lab." },
+        "Report_Date":            { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Date the report was generated / finalized." },
+
+        "Test_Name":              { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Name of the test performed." },
+        "Procedure":              { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Procedure / method used for the test." },
+
+        "Ordering_Provider_First_Name": { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+        "Ordering_Provider_Last_Name":  { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+        "Ordering_Provider_NPI":        { "type": ["string","null"], "pattern": "^[0-9]{10}$", "extraction_mode": "VERBATIM", "description": "10-digit NPI of the ordering provider." },
+        "Ordering_Provider_Title":      { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Title as printed (MD, DO, NP, ...)." },
+
+        "Practice_Name":              { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Ordering practice / clinic name. NOT the testing lab vendor." },
+        "Practice_NPI":               { "type": ["string","null"], "pattern": "^[0-9]{10}$", "extraction_mode": "VERBATIM" },
+        "Practice_Street_Address_1":  { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+        "Practice_Street_Address_2":  { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Suite / Unit / Floor / etc." },
+        "Practice_City":              { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+        "Practice_State":             { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "State where the practice is located." },
+        "Practice_ZIP_5digit":        { "type": ["string","null"], "pattern": "^[0-9]{5}$", "extraction_mode": "VERBATIM" },
+        "Practice_ZIP_4digit":        { "type": ["string","null"], "pattern": "^[0-9]{4}$", "extraction_mode": "VERBATIM", "description": "ZIP+4 suffix when present, else null." },
+
+        "Report_Type":                { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "INTERNAL-ONLY extra (D4; not in target schema). Report type/category as printed; to_production drops it." },
+        "Accession_Number":           { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "INTERNAL-ONLY extra (D4). Accession / Case Number as printed. NOT the MRN. to_production drops it." },
+        "Signing_Pathologist":        { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "INTERNAL-ONLY extra (D4). Signing / reviewing pathologist. to_production drops it." },
+        "Ordering_Provider_Phone":    { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "INTERNAL-ONLY extra (D4). Ordering provider's direct phone if distinct from the practice phone. to_production drops it." },
+        "Additional_Provider_Name":   { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "INTERNAL-ONLY extra (D4). A second/treating/copy-to provider. to_production drops it." }
+      }
+    },
+
+    "Genomic_Variant_umbrella": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Genomic_Variant represents a set of changes in the tested sample compared to a reference sequence for a genome (mCODE genomic-variant profile). One object per distinct variant. RE-INTRODUCED in v4 as a separate top-level section (v3 had merged these into biomarker findings.variant_detail). Every field is emitted on every variant object; null when not on the page (never omitted).",
+      "required": ["count_of_Genomic_Variants", "llm_confidence_score", "Genomic_Variants"],
+      "properties": {
+        "count_of_Genomic_Variants": { "type": "integer", "minimum": 0, "extraction_mode": "DERIVED", "description": "Total count of Genomic Variants extracted; MUST equal Genomic_Variants length." },
+        "llm_confidence_score":      { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" },
+        "Genomic_Variants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [],
+            "properties": {
+              "provenance":                                { "type": ["array","object","null"], "extraction_mode": "DERIVED", "description": "Per-field provenance — PREFERRED an ARRAY of [{field_name, block_id, page, type, rationale}] (legacy map also accepted). One entry per emitted field in THIS variant. Powers the SME trace's per-field reasoning + the explorer." },
+              "page_number":                               { "type": ["integer","null"], "minimum": 1, "extraction_mode": "DERIVED", "description": "Page in the report where the variant information is found. Use the printed page number if available, else estimate from document position." },
+              "gene_studied":                              { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "The gene examined in the study (HGNC-preferred where resolvable; call hgnc_normalize)." },
+              "method":                                    { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "The mechanism used to perform the observation (e.g. NGS, PCR, FISH, Sanger sequencing)." },
+              "result":                                    { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "The presence or absence of the variant (e.g. Detected, Not Detected, Positive, Negative)." },
+              "variant_allele_frequency":                  { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Fraction of reads identifying the variant allele, typically a percentage (e.g. '20.3%'). String to preserve units." },
+              "dna_change_type":                           { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Codified type for the associated DNA marker. Open vocab — accepted values include but are not limited to: Wild type, Deletion, Duplication, Insertion, Deletion/Insertion, Inversion, Substitution." },
+              "amino_acid_change_type":                    { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Codified type for the associated amino-acid marker. Open vocab — accepted values include but are not limited to: Wild type, Deletion, Duplication, Frameshift, Initiating Methionine, ..." },
+              "genomic_dna_change":                        { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Genomic DNA change reported in 'g.' format (e.g. 'g.140753336T>A'). VERBATIM as printed." },
+              "genomic_reference_sequence":                { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "NCBI genomic nucleotide RefSeq ID or LRG identifier (e.g. 'NC_000007.14')." },
+              "coding_dna_change":                         { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Coding DNA change reported in 'c.' format (e.g. 'c.1799T>A'). VERBATIM as printed (even without the 'c.')." },
+              "transcript_reference_sequence":             { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Transcript reference sequence ID (e.g. 'NM_004333.4', 'LRG_...t1'). PRESERVE the version integer." },
+              "amino_acid_change":                         { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Amino-acid change reported in 'p.' format (e.g. 'p.V600E'). VERBATIM as printed (even without the 'p.')." },
+              "amino_acid_reference_sequence":             { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Reference sequence of the amino-acid change (e.g. 'NP_004324.2')." },
+              "clinical_significance":                     { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Interpretation of the variant. Extract the exact wording (e.g. 'PATHOGENIC', 'Variant of Unknown Significance', 'LIKELY BENIGN')." },
+              "genomic_source_class":                      { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Genomic source class as printed (Somatic, Germline, Likely Somatic)." },
+              "human_reference_sequence_assembly_version": { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Genome assembly version (e.g. 'hg19 (GRCh37)', 'GRCh38')." },
+              "allelic_state":                             { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Allelic state (e.g. Heterozygous, Homozygous)." },
+              "chromosome_identifier":                     { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Chromosome identifier (e.g. 'chr7', 'chrX')." },
+              "genomic_position":                          { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Genomic position of the variant (e.g. '140453136'). String to preserve formatting." },
+              "exon":                                      { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Exon number in which the variant is located, if reported." },
+              "needs_review":                              { "type": ["boolean","null"], "extraction_mode": "DERIVED", "description": "INTERNAL. Escalation flag — true when this record relied on an inference that changed a literal token (OCR context-correction, low-margin synonym match) or an unresolved ambiguity." },
+              "review_reason":                             { "type": ["string","null"], "extraction_mode": "DERIVED", "description": "INTERNAL. Why needs_review is set; null when not flagged." },
+              "hgvs_normalized": {
+                "type": ["object","null"],
+                "extraction_mode": "DERIVED",
+                "additionalProperties": true,
+                "description": "INTERNAL. The HGVS-canonical forms (with c./p./g. prefixes, version-aware) from hgvs_validate — SEPARATE from the verbatim fields so the printed surface is preserved AND the normalized form is available. to_production drops it.",
+                "properties": {
+                  "coding":      { "type": ["string","null"] },
+                  "amino_acid":  { "type": ["string","null"] },
+                  "genomic":     { "type": ["string","null"] },
+                  "valid":       { "type": ["boolean","null"] },
+                  "version":     { "type": ["integer","null"] },
+                  "backend":     { "type": ["string","null"] }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "other_molecular_biomarker_umbrella": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Molecular biomarkers which do NOT fit the definition of a Genomic_Variant. DO include: protein expression by IHC (ER, PR, HER2, MMR, PD-L1, Ki-67, CK5, p40, CD-markers); genomic-instability signatures (TMB, MSI, LOH, HRD, ctDNA Tumor Fraction). DO NOT include: histological findings (nuclear grade, growth pattern, necrosis) or general lab markers (Hb, hCG, glucose, iron, reticulin, RhD). FLAT in v4 — one record per biomarker (no findings[]/occurrences[]/variant_detail/biomarker_class).",
+      "required": ["count_of_other_molecular_biomarkers", "llm_confidence_score", "other_molecular_biomarkers"],
+      "properties": {
+        "count_of_other_molecular_biomarkers": { "type": "integer", "minimum": 0, "extraction_mode": "DERIVED", "description": "Total count of other_molecular_biomarkers; MUST equal the list length." },
+        "llm_confidence_score":                { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" },
+        "other_molecular_biomarkers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [],
+            "properties": {
+              "provenance":      { "type": ["array","object","null"], "extraction_mode": "DERIVED", "description": "Per-field provenance — PREFERRED an ARRAY of [{field_name, block_id, page, type, rationale}] (legacy map also accepted). One entry per emitted field in THIS biomarker record." },
+              "page_number":     { "type": ["integer","null"], "minimum": 1, "extraction_mode": "DERIVED", "description": "Page where the biomarker information is found." },
+              "biomarker_name":  { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "The name of the biomarker as stated in the report." },
+              "method":          { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "The method used to test the biomarker (e.g. IHC, NGS, FISH, Special Stains)." },
+              "result":          { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "The result of the biomarker test, verbatim." },
+              "reference_range": { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "The reference range of the result value, if provided." },
+              "interpretation":  { "type": ["string","null"], "extraction_mode": "VERBATIM", "description": "Interpretation of the result (e.g. 'negative', 'positive', 'Stable', 'TMB-Low')." },
+              "needs_review":    { "type": ["boolean","null"], "extraction_mode": "DERIVED", "description": "INTERNAL. Escalation flag (see Genomic_Variant.needs_review)." },
+              "review_reason":   { "type": ["string","null"], "extraction_mode": "DERIVED", "description": "INTERNAL. Why needs_review is set; null when not flagged." }
+            }
+          }
+        }
+      }
+    },
+
+    "tested_biomarker_umbrella": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Every single unique biomarker that was tested, analyzed, or evaluated in the report, regardless of whether findings are positive, negative, indeterminate, or not detected. Sources: named gene panels; gene lists/tables; findings-based names (anything appearing in Genomic_Variant or other_molecular_biomarker); IHC protein markers; genomic-instability markers. EXCLUDE non-molecular stains (PAS, Giemsa, iron, reticulin, H&E) and enzyme stains (lysozyme). Output ALPHABETIZED + UNIQUE.",
+      "required": ["count_of_tested_biomarkers", "page_numbers", "llm_confidence_score", "tested_biomarkers"],
+      "properties": {
+        "count_of_tested_biomarkers": { "type": "integer", "minimum": 0, "extraction_mode": "DERIVED", "description": "Total count of tested biomarkers; MUST equal tested_biomarkers length." },
+        "page_numbers": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 },
+          "extraction_mode": "DERIVED",
+          "description": "Pages where tested biomarkers are found."
+        },
+        "llm_confidence_score": { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" },
+        "tested_biomarkers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "extraction_mode": "DERIVED",
+          "description": "Alphabetized, deduplicated list of unique biomarker / gene names. Do NOT list test METHODS (NGS, MSI, FISH, IHC) as biomarker names."
+        }
+      }
+    },
+
+    "significant_findings": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "OPTIONAL in v4 — DISABLED by default (D3: specimen_findings_team enabled:false in config/teams.yaml). Present only when the team is re-enabled. Multi-specimen pathology narrative; one specimen_findings[] entry per specimen. Shape carried unchanged from v3.",
+      "required": ["count_of_specimen_findings", "llm_confidence_score", "specimen_findings"],
+      "properties": {
+        "count_of_specimen_findings": { "type": "integer", "minimum": 0, "extraction_mode": "DERIVED" },
+        "llm_confidence_score":       { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" },
+        "specimen_findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["specimen","procedure_details","gross_description","microscopic_description","histologic_findings","ancillary_studies_findings","morphology_findings","pTNM_staging_details","lymph_node_details"],
+            "properties": {
+              "provenance": { "type": ["array","object","null"], "extraction_mode": "DERIVED", "description": "Per-field provenance array (see report_metadata.provenance)." },
+              "specimen": {
+                "type": "array",
+                "extraction_mode": "VERBATIM",
+                "description": "Specimen identity rows. One per labelled specimen (A, B, ...).",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "specimen_id":  { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                    "tissue_type":  { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                    "description":  { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                    "tissue_site":  { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                    "laterality":   { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                    "page_number":  { "type": ["integer","null"], "minimum": 1, "extraction_mode": "DERIVED" },
+                    "llm_confidence_score": { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" }
+                  }
+                }
+              },
+              "procedure_details": {
+                "type": "object",
+                "additionalProperties": false,
+                "extraction_mode": "VERBATIM",
+                "properties": {
+                  "procedure":      { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                  "specimen_count": { "type": ["integer","null"], "extraction_mode": "DERIVED" },
+                  "page_number":    { "type": ["integer","null"], "minimum": 1, "extraction_mode": "DERIVED" },
+                  "llm_confidence_score": { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" }
+                }
+              },
+              "gross_description": {
+                "type": "object",
+                "additionalProperties": false,
+                "extraction_mode": "VERBATIM",
+                "properties": {
+                  "text":         { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                  "page_number":  { "type": ["integer","null"], "minimum": 1, "extraction_mode": "DERIVED" },
+                  "llm_confidence_score": { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" }
+                }
+              },
+              "microscopic_description": {
+                "type": "object",
+                "additionalProperties": false,
+                "extraction_mode": "VERBATIM",
+                "properties": {
+                  "text":         { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                  "page_number":  { "type": ["integer","null"], "minimum": 1, "extraction_mode": "DERIVED" },
+                  "llm_confidence_score": { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" }
+                }
+              },
+              "histologic_findings": {
+                "type": "array",
+                "extraction_mode": "VERBATIM",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "finding":        { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                    "interpretation": { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                    "page_number":    { "type": ["integer","null"], "minimum": 1, "extraction_mode": "DERIVED" },
+                    "llm_confidence_score": { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" }
+                  }
+                }
+              },
+              "ancillary_studies_findings": {
+                "type": "array",
+                "extraction_mode": "VERBATIM",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "ancillary_finding": { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                    "interpretation":    { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                    "page_number":       { "type": ["integer","null"], "minimum": 1, "extraction_mode": "DERIVED" },
+                    "llm_confidence_score": { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" }
+                  }
+                }
+              },
+              "morphology_findings": {
+                "type": "object",
+                "additionalProperties": false,
+                "extraction_mode": "VERBATIM",
+                "properties": {
+                  "nuclear_grade":  { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                  "growth_pattern": { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                  "size":           { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                  "necrosis":       { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                  "calcifications": { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                  "tumor_extent":   { "type": ["string","null"], "extraction_mode": "VERBATIM" }
+                }
+              },
+              "pTNM_staging_details": {
+                "type": "object",
+                "additionalProperties": false,
+                "extraction_mode": "VERBATIM",
+                "properties": {
+                  "pTNM_stage":             { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                  "staging_system_version": { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                  "page_number":            { "type": ["integer","null"], "minimum": 1, "extraction_mode": "DERIVED" },
+                  "llm_confidence_score":   { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" }
+                }
+              },
+              "lymph_node_details": {
+                "type": "object",
+                "additionalProperties": false,
+                "extraction_mode": "VERBATIM",
+                "properties": {
+                  "lymph_node_status":              { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                  "number_of_lymph_nodes_examined": { "type": ["integer","null"], "extraction_mode": "DERIVED" },
+                  "number_of_lymph_nodes_positive": { "type": ["integer","null"], "extraction_mode": "DERIVED" },
+                  "text":                           { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+                  "page_number":                    { "type": ["integer","null"], "minimum": 1, "extraction_mode": "DERIVED" },
+                  "llm_confidence_score":           { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "clinical_information": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "OPTIONAL in v4 — DISABLED by default (D3: clinical_info_team enabled:false in config/teams.yaml). Present only when the team is re-enabled. Clinical history + reason for study. Shape carried unchanged from v3.",
+      "required": ["page_number", "llm_confidence_score", "number_of_clinical_histories", "clinical_history", "reason_for_study", "clinical_finding_details"],
+      "properties": {
+        "provenance":                   { "type": ["array","object","null"], "extraction_mode": "DERIVED" },
+        "page_number":                  { "type": ["integer","null"], "minimum": 1, "extraction_mode": "DERIVED" },
+        "llm_confidence_score":         { "type": ["number","null"], "minimum": 0.0, "maximum": 1.0, "extraction_mode": "DERIVED" },
+        "number_of_clinical_histories": { "type": ["integer","null"], "minimum": 0, "extraction_mode": "DERIVED" },
+        "clinical_history": {
+          "type": "array",
+          "extraction_mode": "VERBATIM",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "pre_operative_diagnosis": { "type": ["string","null"], "extraction_mode": "VERBATIM" }
+            }
+          }
+        },
+        "reason_for_study":         { "type": ["string","null"], "extraction_mode": "VERBATIM" },
+        "clinical_finding_details": { "type": ["string","null"], "extraction_mode": "VERBATIM" }
+      }
+    }
+  }
+}

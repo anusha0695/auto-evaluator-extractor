@@ -67,10 +67,13 @@ def main() -> int:
     linker = Linker()
     envelope, links, nrev = assemble_and_link(
         linker=linker, section_outputs=sections, blocks=blocks, block_profiles=[])
-    check("envelope has all 5 sections",
-          all(k in envelope for k in ("report_metadata",
-              "other_molecular_biomarker_umbrella", "tested_biomarker_umbrella",
-              "significant_findings", "clinical_information")))
+    # Generic linker (post-refactor): envelope contains exactly the sections the active
+    # teams produced. Only `tested` + `biomarker` were passed in here, so those are the
+    # only umbrellas. (Add a section to `sections` above to add it to the envelope.)
+    check("envelope emits exactly the produced sections + count",
+          set(envelope) == {"count_of_extracted_objects",
+                             "other_molecular_biomarker_umbrella", "tested_biomarker_umbrella"},
+          str(sorted(envelope)))
     check("JAK2 variant_on_panel link present",
           any(getattr(l, "type", None) == "variant_on_panel" for l in links), str(len(links)))
 
@@ -80,9 +83,10 @@ def main() -> int:
         schema_loader=sl, binding_verifier=LinkBindingVerifier(),
         envelope=envelope, links=links, blocks=blocks, parser_hypothesis=parser_hyp)
     names = {s["verifier_name"] for s in scorecards}
-    check("deterministic verifiers ran (incl. recall_floor + attribution + normalization)",
+    check("deterministic verifiers ran (incl. recall_floor + attribution + normalization + hgvs_validity)",
           names == {"schema_validator", "coverage_audit", "link_consistency",
-                    "evidence_confidence", "recall_floor", "attribution", "normalization"},
+                    "evidence_confidence", "recall_floor", "attribution", "normalization",
+                    "hgvs_validity"},
           str(sorted(names)))
     check("binding summary has refuted+uncertain ints",
           set(binding) == {"refuted", "uncertain"} and all(isinstance(v, int) for v in binding.values()),

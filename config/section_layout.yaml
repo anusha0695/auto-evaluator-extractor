@@ -1,0 +1,73 @@
+# Per-section LAYOUT — the umbrella conventions the Linker and scorer use to be
+# generic. Adding a new schema section + team means adding ONE row here (plus the
+# team in teams_*.yaml + the schema entry), no Python edits.
+#
+# For each section we declare:
+#   record_array   : the property name whose items are the section's records (counted
+#                    by Linker._count_objects). Omit for non-array sections like
+#                    report_metadata; absent ⇒ not counted.
+#   empty          : a schema-shaped empty placeholder used when an active team
+#                    produced nothing. Optional; absent ⇒ `{}`.
+#   gene_key_field : the per-record field carrying the gene identity (used by the
+#                    Linker's gene-key seed to match records across sections via
+#                    HGNC canonicalization). Omit for sections that don't carry genes.
+#                    For string-array sections (e.g. `tested_biomarkers`), set to "*"
+#                    meaning "the record IS the gene string."
+#   gene_key_requires : optional FILTER — only emit a gene-key link when this field
+#                       on the record is non-null/non-empty. Used by the v3 nested
+#                       biomarker shape: only biomarker findings WITH `variant_detail`
+#                       should be variant-linked (plain IHC biomarkers aren't variants).
+#                       Path is dotted relative to the record (`findings[*].variant_detail`).
+#
+# `report_metadata` is intentionally absent: it's a flat object, not a record array.
+
+
+# Global model-tic coercions — schema-scalar field names the model sometimes emits
+# as a 1-element list (it conflates the singular per-record field with a plural
+# umbrella list, e.g. `page_number` vs `page_numbers`). Unwrapping a 1-element list
+# is always safe for these, and only these — read by `extractor._coerce_scalar_tics`.
+scalar_keys:
+  - page_number
+
+
+sections:
+
+  Genomic_Variant_umbrella:
+    record_array: Genomic_Variants
+    gene_key_field: gene_studied            # v4: variant records carry gene_studied
+    empty:
+      count_of_Genomic_Variants: 0
+      llm_confidence_score: null
+      Genomic_Variants: []
+
+  other_molecular_biomarker_umbrella:
+    record_array: other_molecular_biomarkers
+    gene_key_field: biomarker_name          # v3+v4: biomarker records key on name
+    gene_key_requires: findings[*].variant_detail   # v3 only: variant-bearing records
+    empty:
+      count_of_other_molecular_biomarkers: 0
+      llm_confidence_score: null
+      other_molecular_biomarkers: []
+
+  tested_biomarker_umbrella:
+    record_array: tested_biomarkers
+    gene_key_field: "*"                     # tested_biomarkers[] are bare gene strings
+    empty:
+      count_of_tested_biomarkers: 0
+      page_numbers: []
+      llm_confidence_score: null
+      tested_biomarkers: []
+
+  # ---- v3 sections (disabled in v4 but still defined; flip teams.yaml to revive) ----
+
+  significant_findings:
+    record_array: specimen_findings
+    empty:
+      count_of_specimen_findings: 0
+      llm_confidence_score: null
+      specimen_findings: []
+
+  clinical_information:
+    record_array: clinical_history
+    # No empty: a clinical_information record is a flat object, not a list of records.
+    # `clinical_history` is its primary array; count it if present, else 0.

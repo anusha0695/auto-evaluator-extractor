@@ -106,3 +106,30 @@ The internal envelope is converted to the **production schema** for delivery:
 See `PRODUCTION_MAPPING` content (now under `docs/` history) for the full field list, and
 [reference/traceability.md](../reference/traceability.md) for the gate that locks the
 conversion (`gate_p3_m9_production_conversion`).
+
+`to_production` is **shape-tolerant**: it accepts the v3 nested `findings[]` AND the v4
+flat biomarker record, and folds the v4 separate `Genomic_Variant_umbrella` into the same
+`pathology_biomarkers_findings` section — so the production contract is identical on either
+internal shape (`gate_v4_m8_production`).
+
+---
+
+## 7. v4 — mCODE `genomic_pathology_extraction` (current target)
+
+A separate, **non-destructive** internal schema `config/schemas/genomic_pathology_v4.json`
+(bound by `config/teams_v4.yaml`; selected by `--version v4` / `make run-local PHASE=4`).
+v3 and all its gates stay green; v4 adds new files alongside. Differences from v3:
+
+| Change | v3 | v4 |
+|---|---|---|
+| Gene sequence variants | a biomarker `finding` with nested `variant_detail` | their **own** `Genomic_Variant_umbrella` (revived `genomic_variant_team`) — one flat record per variant, with verbatim HGVS + HGNC gene canonicalization |
+| `other_molecular_biomarker_umbrella` | nested `findings[]` + `variant_detail` | **FLAT** — one record per non-variant biomarker (protein expression / molecular scores), 6 fields |
+| `significant_findings`, `clinical_information` | active teams | **DISABLED by default** via `enabled: false` (Decision D3, `core/section_toggle.py`) — code/prompt/schema kept; flip to revive |
+| Verifier floor | normalization (canonical-diff) | **+ HGVS structural-validity** (`verification/hgvs_validity.py`) — malformed HGVS → `needs_review` (never renormalize) |
+
+The four active v4 sections are `report_metadata`, `Genomic_Variant_umbrella`,
+`other_molecular_biomarker_umbrella` (flat), `tested_biomarker_umbrella`. Disabled sections
+are skipped by the planner / graph team-set / verifier suite / scorer / schema validator
+(all consult `core/section_toggle.py`). Full migration log + the 6 locked decisions:
+[`docs/migration/genomic_pathology_v4_plan.md`](../migration/genomic_pathology_v4_plan.md);
+the v4 gates are in [reference/traceability.md](../reference/traceability.md).

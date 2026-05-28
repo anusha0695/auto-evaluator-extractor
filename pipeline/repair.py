@@ -230,6 +230,38 @@ def make_repair_node(*, executor: RepairExecutor):
         logger.info("repair: doc_id=%s applied=%d budget_used=%d",
                     state.get("doc_id"), len(state.get("repair_requests") or []),
                     delta.get("repair_budget_used"))
+        # Trace: one record per executed repair action, with the field's target_ref
+        # so the field timeline shows when its team was re-extracted (or its field
+        # renormalised, link re-evaluated, etc.).
+        try:
+            from core.trace_recorder import extend_trace, record
+            recs: list[dict[str, Any]] = []
+            requests = state.get("repair_requests") or []
+            log = delta.get("repair_log") or state.get("repair_log") or []
+            # repair_log is APPEND-style; the new entries are the tail of length len(requests).
+            new_entries = log[-len(requests):] if requests else []
+            _REPAIR_PLAIN = {
+                "re_extract_team": "Our system re-ran the relevant team to take another pass.",
+                "reprofile_block": "Our system re-classified a block of text and re-extracted from it.",
+                "renormalize_field": "Our system normalised the field's value to its canonical form.",
+                "re_link": "Our system asked the linker to reconsider an uncertain relationship.",
+                "drop_and_flag": "Our system removed an ungrounded value and set it aside for review.",
+            }
+            for e in new_entries:
+                act = e.get("action", "?")
+                recs.append(record(
+                    phase="repair", agent=f"RepairExecutor · {act}",
+                    plain=_REPAIR_PLAIN.get(act, f"Our system applied an automatic '{act}' repair."),
+                    section=e.get("section"), refs=[e.get("target_ref") or ""],
+                    team=str(e.get("team") or ""),
+                    input_summary=f"defect={e.get('defect_type','?')}",
+                    output_summary=f"applied {act} (status={e.get('status','?')})",
+                    verdict=str(e.get("status") or "applied"),
+                    reasoning=str(e.get("detail") or "")))
+            if recs:
+                delta = {**delta, "agent_trace": extend_trace(state.get("agent_trace"), *recs)}
+        except Exception:  # noqa: BLE001
+            logger.exception("repair: trace recording failed (non-fatal)")
         return delta
 
     return repair_node

@@ -60,9 +60,10 @@ async def _document_received_v3_node(state: PipelineState) -> dict[str, Any]:
     if missing:
         raise PipelineError(f"document_received_v3: missing state field(s): {missing}",
                             doc_id=state.get("doc_id"), retry_safe=False)
-    if state.get("pipeline_version") != "v3":
+    if state.get("pipeline_version") not in ("v3", "v4"):
         raise PipelineError(
-            f"graph_selfcorrecting invoked with pipeline_version={state.get('pipeline_version')!r}; expected 'v3'",
+            f"graph_selfcorrecting invoked with pipeline_version={state.get('pipeline_version')!r}; "
+            f"expected 'v3' or 'v4' (v4 reuses the self-correcting graph + a 4-section registry)",
             doc_id=state.get("doc_id"), retry_safe=False)
     # seed the repair-loop channels so they exist from cycle 0.
     return {"team_outputs": {}, "verifier_scorecards": [], "preprocessing_errors": [],
@@ -72,7 +73,8 @@ async def _document_received_v3_node(state: PipelineState) -> dict[str, Any]:
 
 
 def _make_selfcorrecting_verifier_node(*, schema_loader, binding_verifier, gap_tol,
-                           recall_reread_fn=None, persistence=None, attribution_fn=None):
+                           recall_reread_fn=None, persistence=None, attribution_fn=None,
+                           disabled_sections=None):
     """Like graph_linear's verifier node but loop-aware: REPLACES the scorecards each
     cycle (not append — stale cards would mislead triage), threads the recall-floor
     re-read + the memoized `block_reads`, and returns the updated cache."""
@@ -95,6 +97,7 @@ def _make_selfcorrecting_verifier_node(*, schema_loader, binding_verifier, gap_t
             block_profiles=dp.get("block_profiles") or [],
             recall_reread_fn=reread, block_reads=block_reads,
             binding_items_out=binding_items, attribution_fn=attribution_fn,
+            disabled_sections=disabled_sections,
         )
         if persistence is not None:
             try:
@@ -122,8 +125,61 @@ def _make_selfcorrecting_verifier_node(*, schema_loader, binding_verifier, gap_t
                                         "links": links}, indent=2, default=str))
             except Exception:
                 logger.exception("verifier_v3_node: persist failed")
+        # Trace: one record per scorecard + one for the binding verifier — so the
+        # field timeline shows every advisory/structural check that touched a field.
+        from core.trace_recorder import extend_trace, record
+        recs: list[dict[str, Any]] = []
+        # plain-text mapping per verifier name (the one-sentence summary the UI renders).
+        _VERIFIER_PLAIN = {
+            "schema_validator": "A structural check confirmed the envelope's shape matches the expected schema.",
+            "coverage_audit": "A coverage check compared what was extracted against the parser hypothesis.",
+            "link_consistency": "A check made sure every cross-section link points at records that actually exist.",
+            "evidence_confidence": "A check made sure each finding has at least one cited block of evidence.",
+            "recall_floor": "A check looked for fields the block-role mapping says should be present but came back empty.",
+            "attribution": "A check made sure each attribute really describes its owner record (not a neighbour).",
+            "normalization": "A check looked for fields whose canonical form differs from what was extracted.",
+            "hgvs_validity": "A check confirmed every HGVS change is structurally valid.",
+        }
+        for s in scorecards:
+            errs = s.get("field_errors") or []
+            refs = [str(e.get("loc") or e.get("field_name") or e.get("ref") or "")
+                    for e in errs if isinstance(e, dict)]
+            vname = str(s.get("verifier_name") or "verifier")
+            passed = s.get("passed", True)
+            v_plain = _VERIFIER_PLAIN.get(vname, "An automated check reviewed this and " +
+                                          ("found no problem." if passed else "flagged something that needed a closer look."))
+            recs.append(record(
+                phase="verification", agent=vname,
+                plain=v_plain,
+                refs=[r for r in refs if r][:25],
+                input_summary="envelope + scorecards",
+                output_summary=str(s.get("notes") or ("passed" if passed else "FAILED")),
+                verdict="passed" if passed else "failed",
+                reasoning=str(s.get("notes") or "")))
+        recs.append(record(
+            phase="verification", agent="LinkBindingVerifier",
+            plain="A binding check confirmed the relationship each link claims is supported by its cited evidence.",
+            input_summary=f"{len(links)} link(s), {len(binding_items)} item-level verdict(s)",
+            output_summary=f"refuted={binding_summary.get('refuted',0)} uncertain={binding_summary.get('uncertain',0)}",
+            verdict=("passed" if not (binding_summary.get("refuted") or binding_summary.get("uncertain"))
+                     else "flagged")))
+        # One record PER binding item — the verifier's per-ref evidence + verdict.
+        _BIND_CHECK_NAME = {"V1": "grounding", "V2": "relationship", "V3": "hallucination", "V4": "link"}
+        for it in binding_items:
+            chk = str(it.get("check") or "bind").upper()
+            chk_name = _BIND_CHECK_NAME.get(chk, chk.lower())
+            recs.append(record(
+                phase="verification",
+                agent=f"LinkBindingVerifier · {chk}",
+                plain=f"A {chk_name} binding check ran on this item against its cited evidence.",
+                refs=[str(it.get("ref") or "")],
+                input_summary=f"check={it.get('check','?')}",
+                output_summary=str(it.get("verdict") or "—"),
+                verdict=str(it.get("verdict") or ""),
+                reasoning=str(it.get("evidence") or "")))
         return {"verifier_scorecards": scorecards, "binding_verifier": binding_summary,
-                "block_reads": block_reads, "binding_items": binding_items}
+                "block_reads": block_reads, "binding_items": binding_items,
+                "agent_trace": extend_trace(state.get("agent_trace"), *recs)}
     return verifier_node
 
 
@@ -218,7 +274,8 @@ def build_selfcorrecting_graph(
     g.add_node("verifiers", _make_selfcorrecting_verifier_node(
         schema_loader=deps.schema_loader, binding_verifier=deps.binding_verifier,
         gap_tol=deps.coverage_gap_tolerance, recall_reread_fn=recall_reread_fn,
-        persistence=deps.persistence, attribution_fn=getattr(deps, "attribution_fn", None)))
+        persistence=deps.persistence, attribution_fn=getattr(deps, "attribution_fn", None),
+        disabled_sections=getattr(deps, "disabled_sections", None)))
     g.add_node("triage", make_triage_node(agent=triage_agent))
     g.add_node("repair", make_repair_node(executor=repair_executor))
     g.add_node("vmaw", make_vmaw_node(agent=vmaw_agent))

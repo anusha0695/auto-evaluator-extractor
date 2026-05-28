@@ -1,0 +1,110 @@
+# =============================================================================
+# Deterministic Medical NER mapping — v4 (mCODE genomic_pathology_extraction).
+#
+# Non-destructive (D5): config/ner_mapping.yaml stays unchanged for v3. v4 routes
+# GENE / AMINO-ACID candidates ONLY into the sections that legitimately own them in
+# v4 — Genomic_Variant_umbrella (the revived variant section, D1) and (for genes)
+# tested_biomarker_umbrella (the panel). They do NOT flow into
+# other_molecular_biomarker_umbrella any more (which is now FLAT and holds only
+# non-variant protein-expression / molecular-score markers — D2).
+#
+# Why this matters: in v3, GENE/AMINO_ACID routed to biomarker_umbrella because
+# variants lived nested inside it. In v4 the variant team owns variants outright,
+# so routing genes to the biomarker team's CoverageAuditor caused the auditor to
+# flag JAK2 as a "missed biomarker" → Arbiter forced a re-extract → the biomarker
+# team duplicated the variant as a flat-biomarker record. Dropping the route here
+# fixes the cause at the source.
+#
+# All other tables (drop_roles, stoplist, field_hint_rules, vendor_names, the
+# OntoNotes PERSON/DATE/ORG → report_metadata routing) are unchanged from v3.
+# =============================================================================
+
+label_to_umbrellas:
+  # v4 routing: KEEP recall-first (genes route to all three umbrellas). The
+  # canonical fix for cross-section duplication lives DOWNSTREAM in
+  # `config/dedup_policy.yaml` + `Linker._apply_dedup_policy`, not at NER. This
+  # mapping intentionally stays identical to v3 — extraction is recall-first, and
+  # the schema's section ownership is enforced post-assembly by HGNC-canonical dedup.
+  GENE_OR_GENE_PRODUCT: [Genomic_Variant_umbrella, other_molecular_biomarker_umbrella, tested_biomarker_umbrella]
+  AMINO_ACID:           [Genomic_Variant_umbrella, other_molecular_biomarker_umbrella]
+  # en_core_web_sm (OntoNotes) — identical to v3.
+  PERSON:               [report_metadata]
+  DATE:                 [report_metadata]
+  ORG:                  [report_metadata]
+  GPE:                  [report_metadata]
+  LOC:                  [report_metadata]
+  FAC:                  [report_metadata]
+  # (DISEASE / CHEMICAL / CANCER / SIMPLE_CHEMICAL / PATHOLOGICAL_FORMATION are
+  # intentionally NOT mapped — same denoise as v3.)
+
+drop_roles:
+  - references
+  - cpt_codes
+  - fax_transport_noise
+  - chart_image_caption
+  - disclaimer_or_notes
+  - electronic_signature
+  - page_header
+  - page_footer
+
+stoplist:
+  - dna
+  - rna
+  - gene
+  - genes
+  - mutation
+  - mutations
+  - mutant
+  - allele
+  - patient
+  - date
+  - result
+  - results
+  - test
+  - tests
+  - percent
+  - specimen
+  - sample
+  - report
+  - blood
+  - normal
+  - negative
+  - positive
+  - detected
+
+field_hint_rules:
+  - entity_label: DATE
+    near_labels: ["collection date", "collected", "draw date"]
+    field: Collection_Date
+  - entity_label: DATE
+    near_labels: ["received date", "received"]
+    field: Received_Date
+  - entity_label: DATE
+    near_labels: ["report date", "reported", "final report"]
+    field: Report_Date
+  - entity_label: DATE
+    near_labels: ["dob", "date of birth", "d.o.b"]
+    field: Patient_DOB
+  - entity_label: PERSON
+    near_labels: ["ordering physician", "treating physician", "ordered by",
+                  "physician", "provider"]
+    field: Ordering_Provider_Last_Name
+  - entity_label: PERSON
+    near_labels: ["patient name", "patient", "name:"]
+    field: Patient_Last_Name
+  - entity_label: ORG
+    near_labels: ["client", "practice", "clinic", "ordering facility"]
+    field: Practice_Name
+
+vendor_names:
+  - neogenomics
+  - tempus
+  - foundation medicine
+  - foundationone
+  - caris
+  - guardant
+  - myriad
+  - quest
+  - labcorp
+  - invitae
+  - genomic health

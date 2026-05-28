@@ -1,0 +1,129 @@
+# =============================================================================
+# extractor — Specialist Team registry (schema v4 / mCODE genomic_pathology_extraction)
+#
+# Non-destructive v4 registry (Decision D5): config/teams.yaml (v3) is left intact
+# so v3 + all its gates keep passing. This registry binds to
+# config/schemas/genomic_pathology_v4.json and:
+#   - REVIVES genomic_variant_team (D1) → Genomic_Variant_umbrella (a separate section)
+#   - keeps molecular_biomarker_team → other_molecular_biomarker_umbrella (prompt flattened
+#     in V4-M3; binding is the same)
+#   - keeps tested_biomarker_team → tested_biomarker_umbrella
+#   - DISABLES specimen_findings_team + clinical_info_team via `enabled: false` (D3) —
+#     code/prompts/schema sections stay intact; flip to true to revive. Honored by the
+#     planner / graph team-set / scorer / recall-floor via core/section_toggle.py.
+# =============================================================================
+
+schema_path: config/schemas/genomic_pathology_v4.json
+
+teams:
+
+  metadata_team:
+    schema_section: report_metadata
+    prompt_template: config/prompts/metadata_team.j2
+    models:
+      extractor:        { name: gemini-2.5-pro,   temperature: 0.0 }
+      coverage_auditor: { name: gemini-2.5-pro,   temperature: 0.0 }
+      arbiter:          { name: gemini-2.5-flash, temperature: 0.0 }
+    tool_allowlist:
+      - pdf_page_loader
+      - pdf_text_search
+      - docai_layout_lookup
+      - npi_validator
+      - date_parser
+      - schema_validate
+      - state_read
+    auto_accept_confidence_threshold: 0.85
+    coverage_gap_tolerance: 0.10
+
+  # REVIVED in v4 (D1). Owns the separate gene-sequence-variant section. Reuses the
+  # HGVS/HGNC tools that moved to the biomarker team during the v3 merge.
+  genomic_variant_team:
+    schema_section: Genomic_Variant_umbrella
+    prompt_template: config/prompts/genomic_variant_team.j2
+    models:
+      extractor:        { name: gemini-2.5-pro,   temperature: 0.0 }
+      coverage_auditor: { name: gemini-2.5-pro,   temperature: 0.0 }
+      arbiter:          { name: gemini-2.5-flash, temperature: 0.0 }
+    tool_allowlist:
+      - pdf_page_loader
+      - pdf_text_search
+      - docai_layout_lookup
+      - state_read
+      - schema_validate
+      - hgnc_normalize
+      - hgvs_validate
+    auto_accept_confidence_threshold: 0.85
+    coverage_gap_tolerance: 0.10
+
+  # v4: FLAT other_molecular_biomarker (protein expression + molecular scores only;
+  # variants now live in genomic_variant_team). Prompt flattened in V4-M3.
+  molecular_biomarker_team:
+    schema_section: other_molecular_biomarker_umbrella
+    prompt_template: config/prompts/molecular_biomarker_team_v4.j2
+    models:
+      extractor:        { name: gemini-2.5-pro,   temperature: 0.0 }
+      coverage_auditor: { name: gemini-2.5-pro,   temperature: 0.0 }
+      arbiter:          { name: gemini-2.5-flash, temperature: 0.0 }
+    tool_allowlist:
+      - pdf_page_loader
+      - pdf_text_search
+      - docai_layout_lookup
+      - state_read
+      - schema_validate
+      - biomarker_normalize
+      - method_normalize
+    auto_accept_confidence_threshold: 0.85
+    coverage_gap_tolerance: 0.10
+
+  tested_biomarker_team:
+    schema_section: tested_biomarker_umbrella
+    prompt_template: config/prompts/tested_biomarker_team.j2
+    models:
+      extractor:        { name: gemini-2.5-pro,   temperature: 0.0 }
+      coverage_auditor: { name: gemini-2.5-pro,   temperature: 0.0 }
+      arbiter:          { name: gemini-2.5-flash, temperature: 0.0 }
+    tool_allowlist:
+      - pdf_page_loader
+      - pdf_text_search
+      - docai_layout_lookup
+      - state_read
+      - schema_validate
+      - hgnc_normalize
+    auto_accept_confidence_threshold: 0.85
+    coverage_gap_tolerance: 0.10
+
+  # ---- DISABLED by default in v4 (D3). Revive by setting `enabled: true`. ----
+  specimen_findings_team:
+    enabled: false
+    schema_section: significant_findings
+    prompt_template: config/prompts/specimen_findings_team.j2
+    models:
+      extractor:        { name: gemini-2.5-pro,   temperature: 0.0 }
+      coverage_auditor: { name: gemini-2.5-pro,   temperature: 0.0 }
+      arbiter:          { name: gemini-2.5-flash, temperature: 0.0 }
+    tool_allowlist:
+      - pdf_page_loader
+      - pdf_text_search
+      - docai_layout_lookup
+      - state_read
+      - schema_validate
+    auto_accept_confidence_threshold: 0.85
+    coverage_gap_tolerance: 0.10
+
+  clinical_info_team:
+    enabled: false
+    schema_section: clinical_information
+    prompt_template: config/prompts/clinical_info_team.j2
+    models:
+      extractor:        { name: gemini-2.5-pro,   temperature: 0.0 }
+      coverage_auditor: { name: gemini-2.5-pro,   temperature: 0.0 }
+      arbiter:          { name: gemini-2.5-flash, temperature: 0.0 }
+    tool_allowlist:
+      - pdf_page_loader
+      - pdf_text_search
+      - docai_layout_lookup
+      - state_read
+      - schema_validate
+      - date_parser
+    auto_accept_confidence_threshold: 0.85
+    coverage_gap_tolerance: 0.10

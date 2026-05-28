@@ -336,10 +336,24 @@ def make_decision_router_v3_node(*, router: DecisionRouter | None = None):
             len(decision.accepted_sections), len(decision.flagged_sections),
             len(decision.escalation_items),
         )
+        # Trace: the final verdict — refs cover the accepted + flagged sections so a
+        # field's timeline lands on this last step when filtered by its section.
+        from core.trace_recorder import extend_trace, record
+        rec = record(
+            phase="decision", agent="DecisionRouter",
+            plain=f"Our system made the final call on the whole document — verdict: {decision.verdict or 'set'}.",
+            refs=list(decision.accepted_sections or []) + list(decision.flagged_sections or []),
+            input_summary=(f"{len(decision.accepted_sections or [])} accepted + "
+                           f"{len(decision.flagged_sections or [])} flagged + "
+                           f"{len(decision.escalation_items or [])} escalation item(s)"),
+            output_summary=f"verdict={decision.verdict}",
+            verdict=str(decision.verdict),
+            reasoning=str(decision.reason or ""))
         return {
             "verdict": decision.verdict,
             "verdict_reason": decision.reason,
             "router_decision": decision.to_dict(),
+            "agent_trace": extend_trace(state.get("agent_trace"), rec),
         }
 
     return decision_router_v3_node

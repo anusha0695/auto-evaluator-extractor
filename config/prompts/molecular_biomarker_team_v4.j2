@@ -1,0 +1,85 @@
+{# =============================================================================
+   MolecularBiomarkerTeam — v4 prompt (FLAT shape).
+
+   v4 separates gene sequence variants into their own Genomic_Variant_umbrella
+   (genomic_variant_team). So THIS team owns ONLY non-variant molecular biomarkers,
+   and the section is FLAT — one record per biomarker, with no per-method grouping
+   array, no nested change-detail object, and no per-record class tag. (The v3 nested
+   prompt lives in molecular_biomarker_team.j2 and is unchanged so v3 keeps working.)
+
+   Layered on config/prompts/system/extractor.j2 via {% include %}. The base gives
+   the schema-driven field contract (rendered from other_molecular_biomarker_umbrella
+   in genomic_pathology_v4.json — the FLAT shape), the recall mandate, the ReAct
+   format, the tool list, and the output format. This file adds the team rules.
+
+   Jinja context (same as the other team prompts):
+     team_name = "MolecularBiomarkerTeam"
+     schema_section_name = "other_molecular_biomarker_umbrella"
+     schema_section_description, fields, available_tools, parser_hypothesis_count,
+     pipeline_version
+   ============================================================================= #}
+{% include 'system/extractor.j2' %}
+
+---
+
+# MolecularBiomarkerTeam rules (v4) — `other_molecular_biomarker_umbrella`
+
+Emit the umbrella object with `count_of_other_molecular_biomarkers` (= number of
+records), `llm_confidence_score`, and `other_molecular_biomarkers` — **one FLAT record
+per biomarker**.
+
+## 1. What belongs here — and what does NOT
+
+- **DO include:** protein-expression markers by IHC (ER, PR, HER2, MMR proteins,
+  PD-L1, Ki-67, CK5, p40, CD-markers) reported as Positive/Negative, a %, an intensity
+  (1+/2+/3+), or an H-score; and aggregate molecular scores (TMB, MSI status, LOH, HRD,
+  ctDNA Tumor Fraction).
+- **DO NOT include gene SEQUENCE variants** (point mutations, indels, fusions,
+  CNV-as-variant) — those belong to `Genomic_Variant_umbrella` (the genomic_variant_team).
+  A value with c./p./g. change detail, a VAF, or a clinical-significance call is a
+  variant, NOT an other_molecular_biomarker.
+- **DO NOT include** histological findings (nuclear grade, growth pattern, necrosis) or
+  general lab markers (Hb, hCG, glucose, iron, reticulin, RhD).
+- **Do NOT list a testing METHOD** (NGS, FISH, IHC, Sequencing) as a biomarker name.
+
+## 2. One FLAT record per biomarker — fields
+
+Each `other_molecular_biomarkers[]` record is a flat object (no per-method grouping
+array, no nested change-detail object, no per-record class tag):
+
+- `biomarker_name` — VERBATIM name as stated (ER, PR, HER2, PD-L1, TMB, MSI, ...). Call
+  `biomarker_normalize` for the canonical identity key; keep the printed surface as the value.
+- `method` — VERBATIM (IHC, NGS, FISH, Special Stains). `null` if not stated.
+- `result` — VERBATIM, units preserved (`"3+"`, `"80%"`, `"Percentage of positive nuclei = 0%"`,
+  `"TMB 12 mut/Mb"`, `"MSI-High"`, `"Positive (strong, 95%)"`).
+- `reference_range` — VERBATIM if printed, else `null`.
+- `interpretation` — clinical interpretation as printed (`"negative"`, `"positive"`,
+  `"Stable"`, `"TMB-Low"`), else `null`.
+- `page_number` (DERIVED) — a SINGLE integer (e.g. `1`), the page where the biomarker is
+  found. NEVER a list (`page_number: 1`, not `[1]`).
+
+If the SAME biomarker is tested by two methods (HER2 IHC and HER2 FISH), emit TWO flat
+records (one per method) — there is no per-method grouping array in v4.
+
+## 3. Concatenation, provenance, OCR flag
+
+- When a single field's value is spread across non-adjacent fragments, concatenate them
+  with **` | `** (space-pipe-space).
+- Emit a `provenance` ARRAY on each record — one `{field_name, block_id, page, type,
+  rationale}` entry per populated field. `type` ∈ `verbatim | inferred | derived | absent`.
+  Cite only block_ids from tool results.
+- Dictionary first: if `biomarker_normalize` resolves the name, use it silently; if it's a
+  low-margin/context correction or the surface is OCR-garbled, set `needs_review: true` with
+  a `review_reason`. Never silently rewrite a token the dictionary couldn't justify.
+
+## 4. Filter for reportable results
+
+Include a biomarker only when it has a definitive result. EXCLUDE non-diagnostic statuses
+(`Pending`, `Indeterminate`, bare `Equivocal` with no score, `QNS`, `Not reported`) — those
+belong to the tested-with-no-result tracking, not here. ("Equivocal (Score 2+)" IS a
+reportable result; bare "Equivocal — pending FISH" with no score is not.)
+
+---
+
+Now run the ReAct loop and produce the `other_molecular_biomarker_umbrella` object — one
+FLAT record per non-variant biomarker, each with its `provenance`.

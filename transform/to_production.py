@@ -41,7 +41,8 @@ def to_production(envelope: dict[str, Any], *, mapping_path: str = DEFAULT_MAPPI
         "significant_findings": _significant_findings(envelope.get("significant_findings") or {}),
         "clinical_information": _strip_keys(envelope.get("clinical_information") or {}),
         "pathology_biomarkers_findings": _biomarkers_findings(
-            envelope.get("other_molecular_biomarker_umbrella") or {}),
+            envelope.get("other_molecular_biomarker_umbrella") or {},
+            envelope.get("Genomic_Variant_umbrella") or {}),
         "pathology_biomarkers_mentioned": _biomarkers_mentioned(
             envelope.get("tested_biomarker_umbrella") or {}),
     }}
@@ -99,27 +100,65 @@ def _fold_variant(details: Any, vd: Any) -> str | None:
     return "; ".join(pieces)
 
 
-def _biomarkers_findings(umb: dict[str, Any]) -> dict[str, Any]:
+def _biomarkers_findings(umb: dict[str, Any], variant_umb: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Production `pathology_biomarkers_findings`. Shape-tolerant across v3 and v4:
+
+    - v3: each `other_molecular_biomarkers[]` carries a nested `findings[]` (a sequence
+      variant folds its `variant_detail` into `details`).
+    - v4 (D2): `other_molecular_biomarkers[]` is FLAT (the record IS the finding — no
+      findings[], no variant_detail), and gene SEQUENCE variants live in a SEPARATE
+      `Genomic_Variant_umbrella` (D1). We source BOTH here so the production contract
+      (one biomarker-findings section) is unchanged: flat biomarkers map 1:1, and each
+      Genomic_Variant becomes a biomarker entry keyed on gene_studied with its HGVS
+      folded into `details` — exactly the v3 production shape.
+
+    v3 is byte-identical: v3 records always have findings[] so the flat branch never
+    fires, and a v3 envelope has no Genomic_Variant_umbrella so no variant entries are added."""
     included: list[dict[str, Any]] = []
     pages: set[int] = set()
     for bm in (umb.get("other_molecular_biomarkers") or []):
         flat: list[dict[str, Any]] = []
-        for f in (bm.get("findings") or []):
-            if f.get("result") in (None, ""):           # Decision C: definitive = non-null result
-                continue
-            flat.append({
-                "result": f.get("result"), "method": f.get("method"),
-                "details": _fold_variant(f.get("details"), f.get("variant_detail")),  # Decision D
-                # interpretation ← our `assertion` (affirmed/negated/uncertain/...),
-                # falling back to our printed `interpretation` when assertion is absent.
-                "interpretation": f.get("assertion") or f.get("interpretation"),
-            })
+        findings = bm.get("findings")
+        if isinstance(findings, list) and findings:                  # v3 nested shape
+            for f in findings:
+                if f.get("result") in (None, ""):                    # Decision C: definitive = non-null result
+                    continue
+                flat.append({
+                    "result": f.get("result"), "method": f.get("method"),
+                    "details": _fold_variant(f.get("details"), f.get("variant_detail")),  # Decision D
+                    # interpretation ← our `assertion` (affirmed/negated/uncertain/...),
+                    # falling back to our printed `interpretation` when assertion is absent.
+                    "interpretation": f.get("assertion") or f.get("interpretation"),
+                })
+        else:                                                         # v4 FLAT shape: the record IS the finding
+            if bm.get("result") not in (None, ""):
+                flat.append({
+                    "result": bm.get("result"), "method": bm.get("method"),
+                    "details": bm.get("reference_range"),
+                    "interpretation": bm.get("interpretation"),
+                })
         if not flat:
             continue
         if isinstance(bm.get("page_number"), int):
             pages.add(bm["page_number"])
         included.append({"page_number": bm.get("page_number"),
                          "biomarker_name": bm.get("biomarker_name"), "findings": flat})
+
+    # v4 (D1): fold the separate Genomic_Variant_umbrella records into the SAME section.
+    for v in ((variant_umb or {}).get("Genomic_Variants") or []):
+        if v.get("result") in (None, ""):                            # Decision C
+            continue
+        if isinstance(v.get("page_number"), int):
+            pages.add(v["page_number"])
+        included.append({
+            "page_number": v.get("page_number"),
+            "biomarker_name": v.get("gene_studied"),
+            "findings": [{
+                "result": v.get("result"), "method": v.get("method"),
+                "details": _fold_variant(None, v),                   # Decision D — fold HGVS into details
+                "interpretation": v.get("clinical_significance"),
+            }],
+        })
     return {
         "page_numbers": _pages_str(pages),
         "llm_confidence_score": umb.get("llm_confidence_score"),
@@ -192,6 +231,17 @@ def production_label(ref: str, admin_inv: dict[str, str]) -> str | None:
         if "variant_detail" in ref:
             return "pathology_biomarkers_findings › findings › details (folded)"
         return None                             # biomarker_class, specimen_id, method_source_type, … dropped
+    if sec == "Genomic_Variant_umbrella":                # v4 (D1): variants fold into the biomarker-findings section
+        if leaf == "gene_studied":
+            return "pathology_biomarkers_findings › biomarker_name"
+        if leaf in ("result", "method"):
+            return f"pathology_biomarkers_findings › findings › {leaf}"
+        if leaf == "clinical_significance":
+            return "pathology_biomarkers_findings › findings › interpretation (← clinical_significance)"
+        if leaf in ("amino_acid_change", "coding_dna_change", "genomic_dna_change", "exon",
+                    "variant_allele_frequency", "genomic_source_class", "allelic_state"):
+            return "pathology_biomarkers_findings › findings › details (folded)"
+        return None                                      # page_number, refs, needs_review, … dropped
     if sec == "tested_biomarker_umbrella":
         if "biomarkers_tested_no_result" in ref:
             return f"pathology_biomarkers_mentioned › tested_no_result › {leaf}"

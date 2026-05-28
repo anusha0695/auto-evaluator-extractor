@@ -1,0 +1,59 @@
+# Typed link registry — v4 (mCODE genomic_pathology_extraction). V4-M5.
+#
+# Non-destructive (D5): the v3 catalog lives in config/link_registry.yaml and is
+# UNTOUCHED so v3 + all its gates keep passing. The v4 run path
+# (runner.py version=="v4") binds THIS file instead.
+#
+# v4 retarget vs v3:
+#   - REVIVED variant section: gene SEQUENCE variants now live in their own
+#     Genomic_Variant_umbrella (genomic_variant_team), NOT inside
+#     other_molecular_biomarker_umbrella. So `variant_on_panel` re-points its
+#     variant endpoint from other_molecular_biomarker_umbrella → Genomic_Variant_umbrella.
+#   - other_molecular_biomarker_umbrella is now FLAT (protein expression + molecular
+#     scores only) — `tested_to_result` (panel entry ↔ its result) is unchanged.
+#   - DROPPED every significant_findings / clinical_information link: those sections
+#     are DISABLED by default in v4 (D3, core/section_toggle.py). They never activate,
+#     so a link into them could never resolve — removing them keeps the adjudicator
+#     vocabulary honest and the deterministic safety-net tight. (Revive the sections
+#     via teams_v4.yaml `enabled: true` AND restore the relevant rows here.)
+#
+# Semantics of the format are identical to the v3 registry: `endpoints` is
+# order-tolerant; an inactive/unknown type or an endpoint-pair mismatch is dropped
+# before a link can become ground truth.
+
+link_types:
+  # ---- Tier 1 (core) -----------------------------------------------------
+  - type: tested_to_result
+    tier: 1
+    active: true
+    from_section: tested_biomarker_umbrella
+    to_section: other_molecular_biomarker_umbrella
+    description: >-
+      A tested-panel entry to its result in the (flat) biomarker umbrella —
+      e.g. "ER" tested to "ER Positive 95%", "PD-L1" tested to "PD-L1 TPS 80%".
+
+  - type: variant_on_panel
+    tier: 1
+    active: true
+    from_section: Genomic_Variant_umbrella
+    to_section: tested_biomarker_umbrella
+    description: >-
+      A gene sequence variant (Genomic_Variant_umbrella) to the tested-panel entry
+      for the same HGNC gene — e.g. JAK2 V617F variant to the "JAK2" panel entry.
+      Seeded deterministically by the HGNC gene key, confirmed contextually.
+
+  - type: variant_superseded_by
+    tier: 1
+    active: true
+    from_section: Genomic_Variant_umbrella
+    to_section: Genomic_Variant_umbrella
+    description: >-
+      An original variant call to the addendum/amended variant call that supersedes
+      it (e.g. a reclassified VUS → Pathogenic in a later addendum).
+
+  - type: superseded_by
+    tier: 1
+    active: true
+    from_section: other_molecular_biomarker_umbrella
+    to_section: other_molecular_biomarker_umbrella
+    description: An original biomarker result to the addendum result that amends it.

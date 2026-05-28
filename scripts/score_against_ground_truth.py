@@ -394,6 +394,15 @@ _VARIANT_DETAIL_FIELDS = [
     "clinical_significance", "genomic_source_class", "exon",
 ]
 
+# v4 (D1): the revived Genomic_Variant_umbrella scores its FLAT verbatim variant
+# fields. gene_studied + coding/amino change are the match KEY (scored implicitly by
+# the match), so they're not repeated here; these are the value fields.
+_VARIANT_SCORE_FIELDS = [
+    "method", "result", "variant_allele_frequency", "genomic_dna_change",
+    "clinical_significance", "genomic_source_class", "allelic_state",
+    "chromosome_identifier", "exon", "dna_change_type", "amino_acid_change_type",
+]
+
 
 def score_all_sections(doc_id: str, gt_env: dict[str, Any], ex_env: dict[str, Any]) -> list[SectionScore]:
     """Score every section that has non-empty ground truth. v2/v3 shape-tolerant:
@@ -415,6 +424,18 @@ def score_all_sections(doc_id: str, gt_env: dict[str, Any], ex_env: dict[str, An
         ex_t = (ex_env.get("tested_biomarker_umbrella") or {}).get("tested_biomarkers") or []
         scores.append(score_set_section("tested_biomarker_umbrella", gt_t, ex_t, gene_keyed=True))
 
+    # Genomic_Variant_umbrella (v4 — revived SEPARATE sequence-variant section; array).
+    # Additive: v3 envelopes have no Genomic_Variant_umbrella, so this block is skipped
+    # and v2/v3 scoring is unchanged. Items match on gene (HGNC-alias-tolerant) + the
+    # printed coding/amino change, then field-accuracy over the verbatim variant fields.
+    gt_v = (gt_env.get("Genomic_Variant_umbrella") or {}).get("Genomic_Variants")
+    if gt_v:
+        ex_v = (ex_env.get("Genomic_Variant_umbrella") or {}).get("Genomic_Variants") or []
+        scores.append(score_object_array(
+            "Genomic_Variant_umbrella", gt_v, ex_v,
+            key_fields=["gene_studied", "coding_dna_change", "amino_acid_change"],
+            score_fields=_VARIANT_SCORE_FIELDS, gene_field="gene_studied"))
+
     # other_molecular_biomarker_umbrella — flatten v3 findings[] to (name,result) pairs
     gt_b = (gt_env.get("other_molecular_biomarker_umbrella") or {}).get("other_molecular_biomarkers")
     if gt_b:
@@ -423,7 +444,7 @@ def score_all_sections(doc_id: str, gt_env: dict[str, Any], ex_env: dict[str, An
             "other_molecular_biomarker_umbrella",
             _flatten_biomarkers(gt_b), _flatten_biomarkers(ex_b),
             key_fields=["biomarker_name", "method"],
-            score_fields=["result", "interpretation", "biomarker_class"] + _VARIANT_DETAIL_FIELDS,
+            score_fields=["result", "interpretation", "reference_range", "biomarker_class"] + _VARIANT_DETAIL_FIELDS,
             # Match biomarker names through the same HGNC alias canonicalizer used
             # for the gene panel, so synonym pairs (HER2 ≡ HER2/neu ≡ ERBB2,
             # ER ≡ ESR1, PR ≡ PGR) align without a fixture-specific lookup.

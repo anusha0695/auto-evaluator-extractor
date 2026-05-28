@@ -240,13 +240,55 @@ def make_preprocess_node(deps: PreprocessNodeDependencies):
             len(parser_hypothesis.get("candidates") or []),
         )
 
-        # Return a state delta. LangGraph merges this into the state object.
+        # Trace: one record per preprocess agent so the field timeline starts at the
+        # very beginning — DocAI → fax filter → BlockProfiler (per-block role) → NER.
+        from core.trace_recorder import extend_trace, record
+        n_blocks = len(doc_profile.get("blocks") or [])
+        n_profiles = len(doc_profile.get("block_profiles") or [])
+        n_candidates = len(parser_hypothesis.get("candidates") or [])
+        from collections import Counter as _Counter
+        role_counts = _Counter(
+            str(bp.get("text_role") or "?")
+            for bp in (doc_profile.get("block_profiles") or [])
+            if isinstance(bp, dict))
+        section_counts = _Counter(
+            t for bp in (doc_profile.get("block_profiles") or [])
+            if isinstance(bp, dict)
+            for t in (bp.get("target_umbrella_hints") or []))
+        cand_section_counts = _Counter(
+            str(c.get("target_umbrella") or "?")
+            for c in (parser_hypothesis.get("candidates") or [])
+            if isinstance(c, dict))
+        recs = [
+            record(phase="preprocess", agent="DocAIParser",
+                   plain="Our system parsed the PDF into pages, blocks, and text we can reason over.",
+                   input_summary=f"source={source_label}",
+                   output_summary=f"{len(doc_profile.get('pages') or [])} page(s), {n_blocks} block(s)",
+                   verdict="parsed"),
+            record(phase="preprocess", agent="FaxHeaderFilter",
+                   plain="Our system flagged fax-transport noise (headers/banners) so it's ignored downstream.",
+                   input_summary=f"{n_blocks} block(s)",
+                   output_summary=f"flagged {fax_result.blocks_flagged} fax-noise block(s)",
+                   verdict="filtered"),
+            record(phase="preprocess", agent="BlockProfiler",
+                   plain="Our system labelled each block of text with a role and routed it to the right section(s).",
+                   input_summary=f"{n_blocks} block(s) → roles + section hints",
+                   output_summary=(f"{n_profiles} profile(s); roles={dict(role_counts.most_common(6))}; "
+                                   f"hint-sections={dict(section_counts.most_common(6))}"),
+                   verdict="profiled"),
+            record(phase="preprocess", agent="MedicalNER",
+                   plain="Our system spotted clinical entities (genes, dates, IDs) in the source text and proposed candidates for each section.",
+                   input_summary=f"{n_blocks} block(s) over 3 SciSpaCy model(s)",
+                   output_summary=(f"{n_candidates} candidate(s); by section={dict(cand_section_counts.most_common(6))}"),
+                   verdict="extracted"),
+        ]
         return {
             "doc_profile": doc_profile,
             "parser_hypothesis": parser_hypothesis,
             "artifacts_gcs_prefix": deps.persistence.config.doc_prefix(doc_id),
             # latency tracking — additive
             "latency_ms": int(state.get("latency_ms", 0)) + latency_ms,
+            "agent_trace": extend_trace(state.get("agent_trace"), *recs),
         }
 
     return preprocess_node

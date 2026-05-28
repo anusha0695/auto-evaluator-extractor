@@ -136,12 +136,22 @@ class SchemaValidator:
     def validate_envelope(
         self,
         envelope: dict[str, Any],
+        *,
+        disabled_sections: set[str] | None = None,
     ) -> tuple[bool, list[dict[str, Any]]]:
-        """Validate the full schema-v2 envelope. Returns (passed, errors)."""
+        """Validate the full schema-v2 envelope. Returns (passed, errors).
+
+        V4-M7 (D3): `disabled_sections` (e.g. significant_findings, clinical_information
+        in v4) are skipped in the per-section presence check — a deliberately-off section
+        is legitimately absent, not a structural error. Default None → every section is
+        required (v2/v3 unchanged)."""
         errors: list[dict[str, Any]] = []
+        disabled = disabled_sections or set()
 
         # ----- Per-section Pydantic validation -----
         for section in self._schema_loader.list_sections():
+            if section in disabled:
+                continue  # disabled team → section legitimately absent
             payload = envelope.get(section)
             if payload is None:
                 errors.append({

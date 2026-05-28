@@ -60,4 +60,11 @@ def render(*, run) -> None:
     n_review = sum(1 for p in payload if p["status"] == "review")
     st.caption(f"{len(payload)} extracted entities · {n_review} flagged for review · "
                "select an entity → highlight + linked entities; trace below")
+    if st.toggle("Show pipeline flowchart", value=False, key="ent_show_flowchart",
+                 help="Render the pipeline diagram (triage repair loop + VMAW branch) above the entity explorer."):
+        from ui.phase1.field_view import pipeline_flow_svg
+        components.html(
+            f'<div style="background:#fff;padding:8px;border-radius:8px;">{pipeline_flow_svg()}</div>',
+            height=440, scrolling=False,
+        )
     components.html(build_entity_explorer_html(payload, pages, height=760), height=900, scrolling=True)

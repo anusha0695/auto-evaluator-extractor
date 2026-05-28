@@ -23,11 +23,14 @@
 # the block context (step 4 intersection) narrows it.
 label_to_umbrellas:
   # en_ner_bionlp13cg_md
-  # v3 merge: the former Genomic_Variant_umbrella folded into the biomarker
-  # umbrella (a sequence variant is a biomarker finding + nested variant_detail),
-  # so gene / amino-acid mentions seed the biomarker + tested umbrellas now.
-  GENE_OR_GENE_PRODUCT: [other_molecular_biomarker_umbrella, tested_biomarker_umbrella]
-  AMINO_ACID:           [other_molecular_biomarker_umbrella]
+  # Gene / amino-acid mentions seed Genomic_Variant_umbrella (v4 — variants are a
+  # separate section again), the biomarker umbrella (v3 merge — kept so v3 runs are
+  # unaffected), and the tested-biomarker panel. Step-4 intersection with each
+  # block's target_umbrella_hints narrows to whatever the active schema actually has
+  # (a section with no active team is simply never consumed), so listing all three
+  # is recall-safe across v3 and v4.
+  GENE_OR_GENE_PRODUCT: [Genomic_Variant_umbrella, other_molecular_biomarker_umbrella, tested_biomarker_umbrella]
+  AMINO_ACID:           [Genomic_Variant_umbrella, other_molecular_biomarker_umbrella]
   # en_core_web_sm (OntoNotes)
   PERSON:               [report_metadata]
   DATE:                 [report_metadata]

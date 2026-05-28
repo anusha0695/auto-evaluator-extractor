@@ -73,6 +73,32 @@ MAX_ITERATIONS: int = 12
 # saying not to). Defense in depth.
 _FINAL_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```|(\{[\s\S]*\})", re.MULTILINE)
 
+# Schema-scalar fields the model sometimes emits as a 1-element list (it conflates the
+# singular item field with a plural umbrella list, e.g. `page_number` vs `page_numbers`).
+# Set lives in config/section_layout.yaml:scalar_keys — adding a key is a YAML edit.
+def _scalar_tic_keys() -> frozenset[str]:
+    from agents.linker import _scalar_tic_keys as _src
+    return _src()
+
+
+def _coerce_scalar_tics(obj: Any, _keys: frozenset[str] | None = None) -> None:
+    """In-place repair of common LLM type-tics before schema validation: a known scalar
+    field emitted as a 1-element list → its element (`[1]` → `1`); an empty list → null.
+    Recurses dicts/lists. Only touches keys declared in section_layout.yaml; real plural
+    lists (e.g. `page_numbers`, `provenance`) are untouched. No-op when nothing matches."""
+    keys = _keys if _keys is not None else _scalar_tic_keys()
+    if not keys:
+        return
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in keys and isinstance(v, list):
+                obj[k] = v[0] if len(v) == 1 else (None if not v else v)
+            else:
+                _coerce_scalar_tics(v, keys)
+    elif isinstance(obj, list):
+        for it in obj:
+            _coerce_scalar_tics(it, keys)
+
 
 class Extractor(Agent):
     """ReAct agent emitting structured output for one schema-v2 umbrella section.
@@ -193,11 +219,25 @@ class Extractor(Agent):
         final_payload: dict[str, Any] | None = None
         retry_count = 0
         ai_msg = None
+        forced_final_injected = False
 
         for iteration in range(1, self._max_iterations + 1):
             result.iterations_used = iteration
+            # Force a Final Answer on the last TWO permitted iterations: drop the
+            # tools and demand JSON. Without this, a tool-happy model (e.g. a
+            # variant team calling hgnc_normalize/hgvs_validate every turn) can burn
+            # the whole budget without ever finalizing → MAX_ITERATIONS error. A team
+            # that converges normally finalizes well before this, so it's unaffected.
+            force_final = iteration >= self._max_iterations - 1
+            active_llm = llm if force_final else llm_with_tools
+            if force_final and not forced_final_injected:
+                forced_final_injected = True
+                messages.append(HumanMessage(content=(
+                    "You have reached the tool-use budget. STOP calling tools and emit "
+                    f"the Final Answer: the JSON object for the `{self._schema_section}` "
+                    "schema section, exactly — no markdown fences, no preamble, no commentary.")))
             try:
-                ai_msg = await llm_with_tools.ainvoke(messages)
+                ai_msg = await active_llm.ainvoke(messages)
             except Exception as exc:
                 raise AgentError(
                     f"Extractor LLM call failed at iteration {iteration}: {exc}",
@@ -216,7 +256,10 @@ class Extractor(Agent):
             content_text = self._content_to_text(ai_msg.content)
             self._record_trace(result, "ai", content_text, tool_calls)
 
-            if tool_calls:
+            # When forcing the final answer the LLM is bound WITHOUT tools, so any
+            # tool_calls it hallucinates can't be executed — ignore them and parse
+            # the content as the Final Answer instead.
+            if tool_calls and not force_final:
                 result.tool_calls_made += len(tool_calls)
                 tool_messages = await self._execute_tool_calls(tool_calls, tools_by_name, result)
                 messages.extend(tool_messages)
@@ -435,6 +478,27 @@ class Extractor(Agent):
                 self._dump_failure(content, payload=None, error="final answer is not JSON")
                 raise
             payload = json.loads(m.group(1) or m.group(2))
+
+        # Unwrap section-wrapped payloads: the model sometimes emits
+        # `{"Genomic_Variant_umbrella": {...real fields...}}` instead of
+        # `{...real fields...}` at top level (re-stating the section name in the
+        # response is a common LLM tic, especially after a correction message).
+        # The wrap is unambiguous: there's exactly one top-level key and it
+        # equals the team's section name. Unwrap once before downstream repair
+        # + validation so we don't burn the second retry on the same error.
+        if (isinstance(payload, dict)
+                and len(payload) == 1
+                and self._schema_section in payload
+                and isinstance(payload[self._schema_section], dict)):
+            logger.info(
+                "Extractor[%s]: unwrapped section-wrapped final payload "
+                "(top-level key == section name)", self._schema_section)
+            payload = payload[self._schema_section]
+
+        # Repair common LLM type-tics before validation (e.g. a scalar `page_number`
+        # emitted as a 1-element list because the model conflates it with the plural
+        # `page_numbers`). Deterministic + scoped — see _coerce_scalar_tics.
+        _coerce_scalar_tics(payload)
 
         # Pydantic validation against the team's section.
         try:

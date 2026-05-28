@@ -32,6 +32,28 @@ preserved so it cross-references the milestone history.
 | M10d | `gate_p3_m10d_contested_metrics.py` | `pipeline/link_metrics.py` — per-type contested-rate metrics | components §6 |
 | M10e | `gate_p3_m10e_normalization_floor.py` | `verification/normalization.py`, `agents/normalizer_hooks.py`, `config/normalizer_map.yaml` — renormalize | components §5 |
 
+## V4 gates (mCODE genomic_pathology_extraction migration)
+
+The v4 migration is **non-destructive** (Decision D5): it adds new files
+(`config/schemas/genomic_pathology_v4.json`, `config/teams_v4.yaml`,
+`config/prompts/molecular_biomarker_team_v4.j2`, `config/link_registry_v4.yaml`,
+`ground_truth/demo_v4.json`) and version-gated branches, so every v2/v3 gate stays green.
+Run a v4 end-to-end with `make run-local PDF=… PHASE=4` (selects `--version v4`). Full
+migration log + locked decisions: [`docs/migration/genomic_pathology_v4_plan.md`](../migration/genomic_pathology_v4_plan.md).
+
+| Milestone | Gate file (`scripts/gates/`) | Locks (source it covers) | Doc section |
+|---|---|---|---|
+| M1 | `gate_v4_m1_schema_sections.py` | `config/schemas/genomic_pathology_v4.json`, `core/section_toggle.py` — 4-section schema + enable/disable helper | schema |
+| M2 | `gate_v4_m2_variant_team.py` | `config/prompts/genomic_variant_team.j2`, `config/teams_v4.yaml`, `config/ner_mapping.yaml`, `agents/normalizer_hooks.py` (HGNC), `verification/hgvs_validity.py` — revived variant team + HGNC/HGVS | components §5 |
+| M3 | `gate_v4_m3_biomarker_flat.py` | `config/prompts/molecular_biomarker_team_v4.j2` — flat biomarker (variants routed away) | schema |
+| M4 | `gate_v4_m4_section_toggle.py` | `core/section_toggle.py`, `pipeline/graph_linear.py`, `pipeline/runner.py`, `scripts/process_local.py` — honor `enabled:false` on the v4 run path | components §8 |
+| M5 | `gate_v4_m5_linker.py` | `config/link_registry_v4.yaml`, `pipeline/graph_linear.py` (`link_registry_path`) — variant↔tested / biomarker↔tested; drop disabled links | overview §4 |
+| M6 | `gate_v4_m6_verifier_configs.py` | `verification/hgvs_validity.py` (wired), `pipeline/triage.py` (`invalid_hgvs`→escalate), `pipeline/graph_linear.py` (`drop_disabled_section_errors`) — verifier suite retarget | components §5 |
+| M7 | `gate_v4_m7_scoring.py` | `scripts/score_against_ground_truth.py` (Genomic_Variant_umbrella), `ground_truth/demo_v4.json`, `verification/schema_validator.py` (`disabled_sections`) — score 4 sections | schema §6 |
+| M8 | `gate_v4_m8_production.py` | `transform/to_production.py` — flat-tolerant biomarkers + fold the separate variant section | schema §6 |
+| M9 | `gate_v4_m9_ui.py` | `ui/phase1/views/extraction_v2_view.py`, `ui/phase1/views/overview.py` — render variants + flat biomarkers; hide disabled | components §9 |
+| M10 | `gate_v4_m10_field_rules.py` | `config/prompts/system/extractor.j2` + v4 team prompts — `" | "` concat + VERBATIM/DERIVED/null/count discipline | schema |
+
 ## Phase 2 gates (extraction + linking + verifier suite + scoring)
 
 | Milestone | Gate file (`scripts/gates/`) | Locks |

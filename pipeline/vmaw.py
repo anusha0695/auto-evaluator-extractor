@@ -327,6 +327,36 @@ def make_vmaw_node(*, agent: VMAWAgent | None = None):
     async def vmaw_node(state: dict[str, Any]) -> dict[str, Any]:
         if not (state.get("escalation_queue") or []):
             return {}                                    # nothing to resolve
-        return agent.resolve(state)
+        delta = agent.resolve(state)
+        # Trace: one record per VMAW resolution step (EC / CITE / VA) with the item's
+        # ref. The VMAW agent already writes per-item entries to `vmaw_log` — we lift
+        # those into the unified trace so the field timeline shows them as agent steps.
+        try:
+            from core.trace_recorder import extend_trace, record
+            log = delta.get("vmaw_log") or state.get("vmaw_log") or []
+            queue = state.get("escalation_queue") or []
+            new_entries = log[-len(queue):] if queue else []
+            recs: list[dict[str, Any]] = []
+            _VMAW_PLAIN = {
+                "EC": "VMAW expanded the context window to look at more text around the disputed value.",
+                "CITE": "VMAW hunted for a citation that supports (or refutes) the disputed value.",
+                "VA": "VMAW adjudicated between conflicting candidate values for the same field.",
+            }
+            for e in new_entries:
+                cap = e.get("step", "?")
+                recs.append(record(
+                    phase="vmaw", agent=f"VMAW · {cap}",
+                    plain=_VMAW_PLAIN.get(cap, f"VMAW ran '{cap}' on this item."),
+                    section=e.get("section"), refs=[e.get("ref") or ""],
+                    input_summary=f"kind={e.get('kind','?')}",
+                    output_summary=str(e.get("outcome") or e.get("status") or ""),
+                    verdict=str(e.get("status") or e.get("outcome") or "resolved"),
+                    reasoning=str(e.get("rationale") or e.get("detail") or "")))
+            if recs:
+                delta = {**delta, "agent_trace": extend_trace(state.get("agent_trace"), *recs)}
+        except Exception:  # noqa: BLE001
+            import logging as _lg
+            _lg.getLogger(__name__).exception("vmaw: trace recording failed (non-fatal)")
+        return delta
 
     return vmaw_node

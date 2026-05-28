@@ -115,27 +115,44 @@ def build_evidence_html(
     return f'<div style="font-family:sans-serif">{legend}{img}{strip}</div>'
 
 
-def render_trace(st, trace: list[dict[str, Any]], *, technical: bool, show_binding: bool = False) -> None:
+def render_trace(
+    st, trace: list[dict[str, Any]], *,
+    technical: bool, show_binding: bool = False,
+    ref: str | None = None, value: Any = None,
+    show_flowchart: bool = False,
+) -> None:
+    """Render the per-field agent timeline (Option C — phased list with inline
+    reasoning + repair-cycle bands). When `show_flowchart` is True, the pipeline
+    flowchart is rendered above the list as orientation."""
+    from ui.phase1.field_view import pipeline_flow_svg, render_field_flow_html
     if not trace:
         st.caption("No recorded processing steps for this field.")
         return
-    icon = {"extraction": "📄", "linking": "🔗", "verification": "🔎",
-            "repair": "🔧", "resolution": "🤝"}
-    shown = [s for s in trace if show_binding or s.get("kind") != "binding"]
     n_binding = sum(1 for s in trace if s.get("kind") == "binding")
     if n_binding and not show_binding:
-        st.caption(f"{n_binding} binding-verifier check(s) hidden — toggle “Show binding checks” to see their evidence.")
-    for s in shown:
-        line = s["technical"] if technical else s["plain"]
-        md = (f"{icon.get(s['phase'], '•')} **{s['phase']}** · {html.escape(s['node'])}  \n"
-              f"<span style='color:#4b5563'>{html.escape(line)}</span>")
-        reasoning = (s.get("reasoning") or "").strip()
-        if reasoning:
-            lbl = ("note (section-level — not specific to this field)"
-                   if s.get("reasoning_scope") == "section" else "why (this field)")
-            md += (f"  \n<span style='color:#6b7280;font-style:italic'>"
-                   f"↳ {lbl}: {html.escape(reasoning)}</span>")
-        st.markdown(md, unsafe_allow_html=True)
+        st.caption(f"{n_binding} binding-verifier check(s) hidden — toggle "
+                   "“Show binding checks” to see their evidence.")
+    if show_flowchart:
+        # Field-aware flowchart: only render the phases that actually fired for
+        # THIS field. e.g. if VMAW wasn't invoked for this field, the VMAW box
+        # and its incoming "escalate" arrow are omitted; if no repair cycle ran,
+        # the repair-loop curve disappears too. Derived from the same `trace`
+        # the timeline below renders, so the two views stay in lockstep.
+        active_phases = {str(s.get("phase") or "") for s in trace if s.get("phase")}
+        # SVG markers (`<defs>` / `<marker>`) get stripped by st.markdown's sanitizer
+        # → arrows would render headless. Use components.html for raw SVG.
+        try:
+            import streamlit.components.v1 as components  # noqa: WPS433 — lazy
+            components.html(
+                f'<div style="background:#fff;padding:8px;border-radius:8px;">'
+                f'{pipeline_flow_svg(active_phases)}</div>',
+                height=440, scrolling=False,
+            )
+        except Exception:  # noqa: BLE001
+            st.markdown(pipeline_flow_svg(active_phases), unsafe_allow_html=True)
+    html_str = render_field_flow_html(
+        trace, ref=ref, value=value, technical=technical, show_binding=show_binding)
+    st.markdown(html_str, unsafe_allow_html=True)
 
 
 def iter_provenance(prov: Any):

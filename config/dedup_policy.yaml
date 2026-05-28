@@ -1,0 +1,36 @@
+# Cross-section dedup policy — the canonical post-extraction reconciliation.
+#
+# Design intent (architectural): extraction is recall-first. Teams + NER may
+# legitimately route the same entity to more than one section (e.g. JAK2 mentioned
+# as both a sequenced variant AND a gene on the panel). This file declares which
+# section OWNS each kind of entity. After assembly, `Linker._apply_dedup_policy`
+# drops the duplicate from the lower-priority section per the rules below.
+#
+# A rule has:
+#   when_present_in : the OWNING section — when an entity exists here, it wins.
+#   drop_from       : the section to remove the duplicate from.
+#   match_on        : how to recognize "same entity." Options:
+#     gene_key      → HGNC-canonical match on each section's `gene_key_field`
+#                     (declared in section_layout.yaml). This catches HER2↔ERBB2
+#                     aliases automatically via the HGNC resolver.
+#     [optional add-ons in the future: + change_notation, + method, …]
+#   also_requires_filter_on_drop_from : optional dotted-path filter on the
+#                     drop_from record — only drop records that match this filter.
+#                     E.g. for v3 (where biomarkers can legitimately hold non-variant
+#                     IHC results), we only drop biomarker records that ARE variants
+#                     (i.e. carry `findings[*].variant_detail`).
+#
+# Adding a new dedup rule is one YAML row, no Python.
+
+rules:
+
+  # Variants own gene sequence changes — D1. If JAK2 V617F is in
+  # Genomic_Variant_umbrella AND a JAK2 record exists in the flat biomarker section,
+  # drop the biomarker side (it's the same entity, the variant section is canonical).
+  - when_present_in: Genomic_Variant_umbrella
+    drop_from:       other_molecular_biomarker_umbrella
+    match_on:        gene_key
+    # v3 safety: only drop biomarker records that are themselves variants. A v3
+    # envelope without Genomic_Variant_umbrella never triggers this rule anyway
+    # (the OWNING side is absent), so v3 is a no-op.
+    also_requires_filter_on_drop_from: findings[*].variant_detail

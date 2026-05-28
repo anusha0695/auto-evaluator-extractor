@@ -197,9 +197,18 @@ class LinkBindingVerifier:
     def _v3_orphan_hallucination(
         cls, envelope: dict[str, Any], text_by_id: dict, parser_hypothesis: dict[str, Any] | None,
     ) -> list[Verdict]:
+        """V3 — attachment / hallucination, generic over every section a candidate can route to.
+
+        For each NER candidate routed to umbrella U, the haystack is built from EVERY
+        section the candidate's NER label is allowed to route to (per config/ner_mapping.yaml).
+        For v4 a gene candidate is routed to Genomic_Variant_umbrella + tested + biomarker,
+        so a string captured verbatim in any of those three counts as attached. v3 envelopes
+        only carry biomarker + tested → behaviour is unchanged. The hallucination check
+        (emitted name not in source) still scopes to the biomarker section it ran against."""
         out: list[Verdict] = []
         all_text = " ".join(text_by_id.values()).lower()
-        # Hallucination: emitted biomarker name not present anywhere in source text.
+
+        # Hallucination check — biomarker section only (variant section is HGVS-validated separately).
         biomarkers = (envelope.get("other_molecular_biomarker_umbrella") or {}).get(
             "other_molecular_biomarkers") or []
         for i, bm in enumerate(biomarkers):
@@ -207,33 +216,77 @@ class LinkBindingVerifier:
             if name and all_text and name not in all_text:
                 out.append(Verdict(f"other_molecular_biomarkers[{i}]", "V3", "refuted",
                                    f"biomarker '{name}' not present in any source block (possible hallucination)"))
-        # Orphan: a biomarker-umbrella candidate whose text is attached to no record.
-        # TWO refinements (T: don't flood SME with non-defects):
-        #   (1) check the WHOLE emitted record, not just biomarker_name — so variant
-        #       specifics and restated surfaces that DID land are not false orphans.
-        #   (2) a genuinely-unattached candidate only escalates when its evidence is
-        #       illegible/garbled (or it carries a needs_review flag); a clean token
-        #       that simply isn't a biomarker (MRN, a date, an order #) is dropped &
-        #       logged, never queued.
-        if parser_hypothesis:
-            emitted = cls._emitted_haystack(biomarkers)
-            for c in (parser_hypothesis.get("candidates") or []):
-                if c.get("target_umbrella") != "other_molecular_biomarker_umbrella":
-                    continue
-                t = (c.get("text") or "")
-                tl = t.lower()
-                if not tl or tl in emitted:
-                    continue                              # attached → not an orphan
-                # genuinely unattached. Is the SOURCE genuinely unreadable?
-                src = [text_by_id.get(o.get("block_id")) or ""
-                       for o in (c.get("occurrences") or [])]
-                garbled = cls._illegible(t) or any(cls._illegible(s) for s in src)
-                flagged = bool(c.get("needs_review"))
-                if garbled or flagged:
-                    out.append(Verdict(f"candidate:{t}", "V3", "uncertain",
-                        "unattached biomarker candidate over illegible/garbled source — "
-                        "human read needed" if garbled else
-                        "unattached biomarker candidate flagged needs_review"))
-                else:
-                    logger.info("V3 orphan dropped (clean, not a biomarker, not escalated): %r", t)
+
+        if not parser_hypothesis:
+            return out
+
+        # Build a per-umbrella haystack ONCE (used as fallback when a candidate has no label).
+        haystack_by_section: dict[str, str] = {}
+        for section_name, payload in (envelope or {}).items():
+            haystack_by_section[section_name] = cls._emitted_haystack_any(payload)
+
+        # Read the NER label→umbrellas table from config so the orphan haystack and
+        # routing share one source of truth.
+        label_routes = cls._ner_label_routes()
+
+        for c in (parser_hypothesis.get("candidates") or []):
+            target = c.get("target_umbrella")
+            label = c.get("entity_label") or c.get("label")
+            t = (c.get("text") or "")
+            tl = t.lower()
+            if not tl:
+                continue
+            # the set of sections this candidate could legitimately have landed in.
+            # Prefer label→umbrellas (config); fall back to the single target_umbrella;
+            # final fallback to every section in the envelope.
+            sections = list(label_routes.get(str(label or ""), [])) or (
+                [target] if target else list(haystack_by_section))
+            # attached if its text appears in ANY of those sections' emitted strings.
+            attached = any(tl in (haystack_by_section.get(s) or "") for s in sections)
+            if attached:
+                continue
+            # Only THIS-umbrella candidates can become V3 verdicts (we don't speak for
+            # other sections' own verifiers).
+            if target != "other_molecular_biomarker_umbrella":
+                continue
+            src = [text_by_id.get(o.get("block_id")) or ""
+                   for o in (c.get("occurrences") or [])]
+            garbled = cls._illegible(t) or any(cls._illegible(s) for s in src)
+            flagged = bool(c.get("needs_review"))
+            if garbled or flagged:
+                out.append(Verdict(f"candidate:{t}", "V3", "uncertain",
+                    "unattached biomarker candidate over illegible/garbled source — "
+                    "human read needed" if garbled else
+                    "unattached biomarker candidate flagged needs_review"))
+            else:
+                logger.info("V3 orphan dropped (clean, not present in any routable section, not escalated): %r [routes=%s]", t, sections)
         return out
+
+    @staticmethod
+    def _emitted_haystack_any(payload: Any) -> str:
+        """Lowercased concatenation of every string/number/bool-free leaf anywhere inside
+        `payload`. Used to test attachment for an arbitrary section."""
+        bits: list[str] = []
+        def _walk(o: Any) -> None:
+            if isinstance(o, dict):
+                for v in o.values():
+                    _walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    _walk(v)
+            elif isinstance(o, (str, int, float)) and not isinstance(o, bool):
+                bits.append(str(o))
+        _walk(payload)
+        return " ".join(bits).lower()
+
+    @staticmethod
+    def _ner_label_routes() -> dict[str, list[str]]:
+        """Read config/ner_mapping.yaml:label_to_umbrellas once. Returns {} on failure."""
+        import yaml
+        from pathlib import Path
+        try:
+            raw = yaml.safe_load(Path("config/ner_mapping.yaml").read_text(encoding="utf-8")) or {}
+            m = raw.get("label_to_umbrellas") or {}
+            return {str(k): list(v or []) for k, v in m.items()}
+        except Exception:  # noqa: BLE001
+            return {}

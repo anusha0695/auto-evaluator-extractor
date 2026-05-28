@@ -31,4 +31,15 @@ def build_normalizers() -> dict[str, Callable[[str], dict[str, Any]]]:
         norm = r.get("normalized")
         return {"value": norm, "matched": bool(r.get("valid") and norm)}
 
-    return {"biomarker": _biomarker, "method": _method, "hgvs": _hgvs}
+    def _hgnc(raw: str) -> dict[str, Any]:
+        # Gene-symbol canonicalization (e.g. 'JAK-2' -> 'JAK2', 'HER2/neu' -> 'ERBB2').
+        # CONSERVATIVE: only an EXACT alias-table canonicalization is safe to auto-write
+        # back. Fuzzy / ambiguous / unknown leave matched=False — those are corrections
+        # that must be flagged + human-confirmed (the extractor stamps needs_review), not
+        # silently rewritten into ground truth.
+        from preprocess.hgnc_resolver import hgnc_normalize
+        r = hgnc_normalize(raw) or {}
+        canon = r.get("canonical")
+        return {"value": canon, "matched": bool(r.get("status") == "exact" and canon)}
+
+    return {"biomarker": _biomarker, "method": _method, "hgvs": _hgvs, "hgnc": _hgnc}

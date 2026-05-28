@@ -92,9 +92,13 @@ it. A block often feeds MORE THAN ONE umbrella — emit all that apply, as a JSO
 array:
 
 - `report_metadata` — patient, vendor, dates, ordering provider, practice
-- `other_molecular_biomarker_umbrella` — ALL biomarkers: protein-expression
-  (ER/PR/HER2/Ki-67/PD-L1), aggregate scores (TMB/MSI/HRD), AND gene sequence
-  variants (a variant is a biomarker finding with `variant_detail`)
+- `Genomic_Variant_umbrella` — gene SEQUENCE variants: point mutations, indels,
+  fusions, CNVs-as-variants (anything with c./p./g. change detail, a VAF, a clinical
+  significance call, or a genomic position)
+- `other_molecular_biomarker_umbrella` — NON-variant molecular biomarkers:
+  protein-expression by IHC (ER/PR/HER2/Ki-67/PD-L1) and aggregate scores
+  (TMB/MSI/HRD). (Also feeds variants under the merged-biomarker schema — when in
+  doubt on a variant row, emit BOTH this and `Genomic_Variant_umbrella`.)
 - `tested_biomarker_umbrella` — panel grid listing all tested genes/biomarkers
 - `significant_findings` — multi-specimen surgical-pathology narrative: gross /
   microscopic / final diagnosis, histology, synoptic staging, lymph nodes
@@ -105,8 +109,10 @@ array:
 Multi-umbrella guidance (emit ALL that apply):
 
 - A `results_table` block holds biomarker/variant result rows AND establishes
-  that those genes were on the panel →
-  `["other_molecular_biomarker_umbrella", "tested_biomarker_umbrella"]`.
+  that those genes were on the panel. For gene SEQUENCE-variant rows emit
+  `["Genomic_Variant_umbrella", "tested_biomarker_umbrella"]`; for protein/score
+  biomarker rows emit `["other_molecular_biomarker_umbrella", "tested_biomarker_umbrella"]`
+  (emit all that apply when a table mixes both).
 - A `panel_or_test_name` block names the test (a metadata field captures the
   name) AND lists tested genes → often
   `["report_metadata", "tested_biomarker_umbrella"]`.

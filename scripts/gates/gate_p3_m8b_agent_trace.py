@@ -46,11 +46,19 @@ def main() -> int:
                  extractor=_ex({"Additional_Provider_Name": secret_value, "page": 1}),
                  auditor=NS(coverage_ok=True, gap_signal=False, parser_hypothesis_misses=[], latency_ms=80))
     t1 = build_team_trace(r1, team_key="metadata_team")
-    check("2 records", len(t1) == 2, str(len(t1)))
-    check("ordered steps 0,1", [r["step"] for r in t1] == [0, 1])
-    check("agents are Extractor, CoverageAuditor", [r["agent"] for r in t1] == ["Extractor", "CoverageAuditor"])
-    check("auditor verdict coverage_ok", t1[1]["verdict"] == "coverage_ok")
-    check("extractor counted 2 populated fields", "2 populated field(s)" in t1[0]["output_summary"], t1[0]["output_summary"])
+    # Post-M13: build_team_trace expands the Extractor's reasoning_trace into per-
+    # Thought/Tool records, so the count is now (high-level agents + reasoning steps).
+    # The high-level agents are unchanged; verify them explicitly.
+    hi_t1 = [r["agent"] for r in t1 if not r["agent"].startswith("Extractor · ")]
+    check("steps are strictly increasing", [r["step"] for r in t1] == list(range(len(t1))))
+    check("high-level agents = [Extractor, CoverageAuditor]",
+          hi_t1 == ["Extractor", "CoverageAuditor"], str(hi_t1))
+    check("reasoning-chain records appear (Thought / Tool)",
+          any(r["agent"].startswith("Extractor · ") for r in t1))
+    check("auditor verdict coverage_ok",
+          next(r for r in t1 if r["agent"] == "CoverageAuditor")["verdict"] == "coverage_ok")
+    check("extractor counted 2 populated fields",
+          "2 populated field(s)" in next(r for r in t1 if r["agent"] == "Extractor")["output_summary"])
 
     print("[2] conflict path → extractor + auditor(gap) + arbiter + retry")
     r2 = _result("other_molecular_biomarker_umbrella",
@@ -61,14 +69,16 @@ def main() -> int:
                             re_extract_hints=[{"field_name": "HER2", "hint": "look in ancillary studies"}]),
                  retry=_ex({"other_molecular_biomarkers": [{"biomarker_name": "JAK2"}, {"biomarker_name": "HER2"}]}, conf=0.92))
     t2 = build_team_trace(r2, team_key="molecular_biomarker_team")
-    check("4 records", len(t2) == 4, str(len(t2)))
-    check("agents in order",
-          [r["agent"] for r in t2] == ["Extractor", "CoverageAuditor", "Arbiter", "Extractor (re-extract)"],
-          str([r["agent"] for r in t2]))
-    check("auditor flagged gap", t2[1]["verdict"] == "gap_flagged")
-    check("arbiter verdict RE_EXTRACT", t2[2]["verdict"] == "RE_EXTRACT")
-    check("arbiter records hint count", "1 hint(s)" in t2[2]["output_summary"], t2[2]["output_summary"])
-    check("retry input notes 1 hint", "1 focused hint" in t2[3]["input_summary"], t2[3]["input_summary"])
+    hi_t2 = [r["agent"] for r in t2 if not r["agent"].startswith("Extractor · ")]
+    check("high-level agents in order",
+          hi_t2 == ["Extractor", "CoverageAuditor", "Arbiter", "Extractor (re-extract)"], str(hi_t2))
+    check("auditor flagged gap",
+          next(r for r in t2 if r["agent"] == "CoverageAuditor")["verdict"] == "gap_flagged")
+    arb = next(r for r in t2 if r["agent"] == "Arbiter")
+    check("arbiter verdict RE_EXTRACT", arb["verdict"] == "RE_EXTRACT")
+    check("arbiter records hint count", "1 hint(s)" in arb["output_summary"], arb["output_summary"])
+    rx = next(r for r in t2 if r["agent"] == "Extractor (re-extract)")
+    check("retry input notes 1 hint", "1 focused hint" in rx["input_summary"], rx["input_summary"])
 
     print("[3] PHI discipline — extracted field VALUES are not dumped (only counts)")
     blob = str(t1) + str(t2)
@@ -76,9 +86,10 @@ def main() -> int:
     # as a COUNT, never serialized into the trace. (Arbiter reasoning text — the
     # agent's rationale — IS included intentionally; trace artifacts are local-only.)
     check("extracted value (provider name) not dumped", secret_value not in blob)
-    check("extractor output is a field COUNT, not the raw dict",
+    check("extractor (high-level) output is a field COUNT, not the raw dict",
           all("populated field(s)" in r["output_summary"]
-              for r in (t1 + t2) if r["agent"].startswith("Extractor")))
+              for r in (t1 + t2)
+              if r["agent"] in ("Extractor", "Extractor (re-extract)")))
 
     print("[3b] each agent carries its own reasoning")
     by_agent = {r["agent"]: r for r in t2}
@@ -98,7 +109,13 @@ def main() -> int:
 
     print("[4] aggregate across teams")
     agg = aggregate_team_traces({"metadata_team": r1, "molecular_biomarker_team": r2})
-    check("aggregate has 2 + 4 = 6 records", len(agg) == 6, str(len(agg)))
+    # Aggregate now includes high-level agents + their expanded reasoning steps.
+    # Verify the high-level skeleton without depending on the reasoning expansion count.
+    hi_agents = [r["agent"] for r in agg if not r["agent"].startswith("Extractor · ")]
+    check("aggregate carries every high-level team agent",
+          hi_agents == ["Extractor", "CoverageAuditor",
+                        "Extractor", "CoverageAuditor", "Arbiter", "Extractor (re-extract)"],
+          str(hi_agents))
     check("teams tagged", {r["team"] for r in agg} == {"metadata_team", "molecular_biomarker_team"})
 
     print("-" * 60)

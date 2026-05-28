@@ -58,13 +58,17 @@ def render(*, run: RunSummary, extraction: dict[str, Any] | None) -> None:
         # Quick stats on what got extracted
         meta = extraction.get("report_metadata") or {}
         n_metadata = sum(1 for v in meta.values() if v not in (None, ""))
-        biomarkers = (extraction.get("other_molecular_biomarker_umbrella") or {}).get("other_molecular_biomarkers") or []
-        n_biomarkers = (extraction.get("other_molecular_biomarker_umbrella") or {}).get("count", len(biomarkers))
-        # sequence variants are biomarker findings carrying a variant_detail (v3 merge)
+        _omb = extraction.get("other_molecular_biomarker_umbrella") or {}
+        biomarkers = _omb.get("other_molecular_biomarkers") or []
+        # count field renamed v3 `count` → v4 `count_of_other_molecular_biomarkers`
+        n_biomarkers = _omb.get("count", _omb.get("count_of_other_molecular_biomarkers", len(biomarkers)))
+        # Variants: v3 = biomarker findings carrying a variant_detail; v4 = the SEPARATE
+        # Genomic_Variant_umbrella. Count both so the stat is right on either shape.
         n_variants = sum(
             1 for bm in biomarkers for f in (bm.get("findings") or [])
             if isinstance(f, dict) and f.get("variant_detail")
         )
+        n_variants += len((extraction.get("Genomic_Variant_umbrella") or {}).get("Genomic_Variants") or [])
         n_tested = (extraction.get("tested_biomarker_umbrella") or {}).get("count_of_tested_biomarkers", 0)
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("metadata fields populated", n_metadata)

@@ -40,7 +40,7 @@ ACTIONS = ("re_extract_team", "reprofile_block", "renormalize_field",
 
 @dataclass
 class Defect:
-    defect_type: str                 # schema_error|recall_miss_present|block_misroute|missing_provenance|binding_refuted|binding_uncertain|needs_review|link_cannot_form|normalization_invalid|attribution_contested
+    defect_type: str                 # schema_error|recall_miss_present|block_misroute|missing_provenance|binding_refuted|binding_uncertain|needs_review|link_cannot_form|normalization_invalid|attribution_contested|invalid_hgvs
     section: str | None
     team: str | None
     target_ref: str | None
@@ -76,7 +76,7 @@ _TEAM_REQUIRED = {"re_extract_team", "reprofile_block"}
 # Defects that need human judgment → always escalate (skip repair, straight to the
 # escalation queue → VMAW). Re-extraction-proof kinds belong here; the agent router
 # (triage_llm) can additionally route an addressable defect to 'escalate' per-case.
-_ESCALATE_ONLY = {"binding_uncertain", "needs_review"}
+_ESCALATE_ONLY = {"binding_uncertain", "needs_review", "invalid_hgvs"}
 
 
 def build_defects(state: dict[str, Any]) -> list[Defect]:
@@ -153,6 +153,20 @@ def build_defects(state: dict[str, Any]) -> list[Defect]:
                 defect_type="normalization_invalid", section=section,
                 team=_SECTION_TEAM.get(section), target_ref=ref,
                 detail=f"{e.get('normalizer_key')}: {e.get('input')} → {e.get('canonical')}"[:200]))
+
+    # (2.7) HGVS structural-validity floor (V4-M6). A printed change that is genuinely
+    # MALFORMED with no canonical → needs human review. Escalate-only (in _ESCALATE_ONLY):
+    # NEVER renormalize (there is no canonical to write) and re-extraction can't fix an
+    # OCR-garbled token deterministically — route straight to SME.
+    hv = by_name.get("hgvs_validity")
+    if hv is not None:
+        for e in (hv.get("field_errors") or []):
+            ref = e.get("ref") or e.get("field_name")
+            section = _section_of(ref)
+            defects.append(Defect(
+                defect_type="invalid_hgvs", section=section,
+                team=_SECTION_TEAM.get(section), target_ref=ref,
+                detail=f"malformed HGVS in {e.get('leaf')}: {e.get('value')!r}"[:200]))
 
     # (3) Missing provenance: a biomarker finding has a result but no occurrences.
     for i, bm in enumerate((envelope.get("other_molecular_biomarker_umbrella") or {})
@@ -348,8 +362,42 @@ def make_triage_node(*, agent: TriageAgent | None = None):
                     state.get("doc_id"), decision.route,
                     len(decision.repair_requests), len(decision.escalations),
                     len(queue), n_dropped)
+        # Trace: a single Triage record summarising the decision, plus one record per
+        # defect (with the defect's target ref) so a field's timeline shows when triage
+        # decided to repair vs escalate THIS field.
+        from core.trace_recorder import extend_trace, record
+        recs: list[dict[str, Any]] = []
+        recs.append(record(
+            phase="triage", agent="Triage",
+            plain=("Our system classified the open defects and routed each one — either back for "
+                   "an automatic repair, or up to a human reviewer."),
+            input_summary=f"{len(decision.repair_requests) + len(decision.escalations)} defect(s) considered",
+            output_summary=(f"route={decision.route}; {len(decision.repair_requests)} repair(s), "
+                            f"{len(decision.escalations)} escalation(s) (dedup -{n_dropped})"),
+            verdict=decision.route,
+            reasoning="; ".join(decision.notes or [])[:1000]))
+        for rr in decision.repair_requests:
+            act = rr.get("action", "?")
+            recs.append(record(
+                phase="triage", agent=f"Triage · repair · {act}",
+                plain=f"Triage queued an automatic '{act}' repair for this field.",
+                section=rr.get("section"), refs=[rr.get("target_ref") or ""],
+                team=str(rr.get("team") or ""),
+                input_summary=f"defect_type={rr.get('defect_type','?')}",
+                output_summary=f"queued action={act} on team={rr.get('team') or '-'}",
+                verdict="repair_queued", reasoning=str(rr.get("detail") or "")))
+        for esc in decision.escalations:
+            kind = esc.get("kind", "?")
+            recs.append(record(
+                phase="triage", agent=f"Triage · escalate · {kind}",
+                plain=f"Triage flagged this '{kind}' for a human reviewer.",
+                section=esc.get("section"), refs=[esc.get("ref") or ""],
+                input_summary=f"kind={kind}",
+                output_summary=f"to SME — {esc.get('reason','')}",
+                verdict="escalated", reasoning=str(esc.get("detail") or "")))
         return {"repair_requests": decision.repair_requests,
-                "defect_signatures_seen": seen, "escalation_queue": queue}
+                "defect_signatures_seen": seen, "escalation_queue": queue,
+                "agent_trace": extend_trace(state.get("agent_trace"), *recs)}
 
     return triage_node
 

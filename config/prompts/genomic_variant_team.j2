@@ -1,6 +1,112 @@
-{# RETIRED (v3 merge). The separate Genomic_Variant_umbrella was folded into
-   other_molecular_biomarker_umbrella — a gene sequence variant is now a
-   biomarker finding carrying a nested `variant_detail` (verbatim HGVS +
-   hgvs_normalized). See config/prompts/molecular_biomarker_team.j2 §3b. This
-   file is no longer referenced by config/teams.yaml and is not rendered. #}
-{# Intentionally left as a tombstone so the history of the merge is discoverable. #}
+{# =============================================================================
+   GenomicVariantTeam — team-specific prompt (REVIVED for schema v4).
+
+   v4 un-merges variants from the biomarker umbrella: a gene sequence variant is
+   once again its OWN top-level section, `Genomic_Variant_umbrella`, with one
+   object per distinct variant. (In v3 these lived as `variant_detail` nested in
+   other_molecular_biomarker findings; see docs/migration/genomic_pathology_v4_plan.md.)
+
+   Layered on config/prompts/system/extractor.j2 via {% include %}. The base gives
+   the schema-driven field contract (rendered from Genomic_Variant_umbrella in
+   genomic_pathology_v4.json), the recall mandate, the ReAct format, the tool list,
+   and the output format. This file adds the variant-specific rules.
+
+   Jinja context (same as the other team prompts):
+     team_name = "GenomicVariantTeam"
+     schema_section_name = "Genomic_Variant_umbrella"
+     schema_section_description, fields, available_tools, parser_hypothesis_count,
+     pipeline_version
+   ============================================================================= #}
+{% include 'system/extractor.j2' %}
+
+---
+
+# GenomicVariantTeam rules — `Genomic_Variant_umbrella`
+
+A **Genomic_Variant** is a set of changes in the tested sample relative to a reference
+sequence for a genome (the mCODE genomic-variant profile). This section is an object with
+`count_of_Genomic_Variants`, `llm_confidence_score`, and `Genomic_Variants` — **one object
+per distinct variant** the report reports (point mutation, indel, fusion, CNV-as-variant,
+or an explicit "Not Detected" call for a specifically tested locus).
+
+## 1. What belongs here (vs other_molecular_biomarker)
+
+- **HERE (Genomic_Variant):** gene sequence changes — `JAK2 V617F`, `BRAF V600E`,
+  `EGFR exon 19 deletion`, fusions, CNVs reported as variants — anything with HGVS-style
+  change detail (c./p./g.), a VAF, a clinical significance call, or a genomic position.
+- **NOT here (→ other_molecular_biomarker_umbrella):** protein-expression by IHC
+  (ER, PR, HER2, Ki-67, PD-L1) and aggregate molecular scores (TMB, MSI, LOH, HRD,
+  ctDNA Tumor Fraction). Those have no per-variant change detail.
+- **NOT here:** histological findings, general lab markers, testing METHODS as names.
+
+## 2. One object per distinct variant
+
+- One `Genomic_Variants[]` entry per distinct variant. The same variant restated in two
+  places is still ONE object — do not duplicate. Two different variants in the same gene
+  are two objects.
+- `count_of_Genomic_Variants` MUST equal the length of `Genomic_Variants`.
+
+## 3. Per-variant fields — EVERY field emitted, `null` when absent
+
+Emit ALL fields on every object; use JSON `null` (never `"N/A"`/`""`/`"None"`) when the
+value is not on the page. Never infer a value the document does not state.
+
+- `gene_studied` — the gene examined. Call `hgnc_normalize` for the HGNC-preferred symbol;
+  keep the printed surface if it differs and the dictionary can't justify a rewrite
+  (then set `needs_review: true` with a `review_reason`).
+- `method` — VERBATIM (NGS, PCR, FISH, Sanger sequencing, ...).
+- `result` — VERBATIM call (Detected, Not Detected, Positive, Negative).
+- `variant_allele_frequency` — VAF VERBATIM with units (e.g. `"20.3%"`).
+- `dna_change_type`, `amino_acid_change_type` — codified type as printed (open vocab:
+  Wild type / Deletion / Duplication / Insertion / Deletion-Insertion / Inversion /
+  Substitution / Frameshift / Initiating Methionine / ...). VERBATIM; `null` if not stated.
+- `genomic_dna_change` (`g.`), `coding_dna_change` (`c.`), `amino_acid_change` (`p.`) —
+  **VERBATIM exactly as printed**, including when the report omits the `g.`/`c.`/`p.`
+  prefix (e.g. `1849G>T`, `V617F`). Do NOT add a prefix the document omits.
+- `genomic_reference_sequence` (NC_/LRG), `transcript_reference_sequence` (NM_ — preserve
+  the version integer, `NM_004333.4` ≠ `.3`), `amino_acid_reference_sequence` (NP_).
+- `clinical_significance` — VERBATIM (Pathogenic / Likely Pathogenic / VUS / Likely Benign /
+  Benign, or the narrative as printed).
+- `genomic_source_class` (Somatic / Germline / Likely Somatic / Unknown),
+  `human_reference_sequence_assembly_version` (`hg19 (GRCh37)`, `GRCh38`),
+  `allelic_state` (Heterozygous / Homozygous), `chromosome_identifier` (`chr7`),
+  `genomic_position`, `exon` — all VERBATIM, `null` when not on the page.
+- `page_number` (DERIVED) — a SINGLE integer (e.g. `1`), the page where the variant is
+  found. NEVER a list — `page_number: [1]` is wrong; emit `page_number: 1`. (The plural
+  `page_numbers` list belongs to the tested-biomarker umbrella, not here.)
+
+## 3b. Canonical HGVS — separate from the verbatim fields
+
+After capturing the verbatim notation, call `hgvs_validate` on the printed change and put
+the normalized result in `hgvs_normalized` (`{coding, amino_acid, genomic, valid, version,
+backend}`). This is INTERNAL (dropped at production) and is SEPARATE from the verbatim
+fields so the printed surface is preserved AND the canonical form is available. On failure
+leave those null — the verbatim fields still hold what the page said.
+
+**Tool budget — converge fast.** Call `hgnc_normalize` AT MOST ONCE per gene and
+`hgvs_validate` AT MOST ONCE per change notation. Do NOT re-call a tool with the same
+argument or loop on it. Once you have the gene key and the validated change for each
+variant, STOP calling tools and emit the Final Answer JSON immediately — a single
+clean `Genomic_Variant_umbrella` object. A `null` from a tool is a final answer for that
+field, not a reason to retry.
+
+## 4. Concatenation + provenance
+
+- When a single field's value is spread across non-adjacent fragments, concatenate them
+  with **` | `** (space-pipe-space).
+- Emit a `provenance` ARRAY on each variant — one `{field_name, block_id, page, type,
+  rationale}` entry per populated field. `type` ∈ `verbatim | inferred | derived | absent`;
+  `rationale` is one short clause (required for `inferred`/`derived`). Cite only block_ids
+  from tool results.
+
+## 5. OCR / inference flag
+
+Dictionary first. If `hgnc_normalize` resolves the gene exactly, use it silently; if it's a
+fuzzy/context correction or the surface is OCR-garbled, set `needs_review: true` with a
+`review_reason` (independently verified downstream). Never silently rewrite a token the
+dictionary couldn't justify; the verbatim surface stays in the verbatim fields.
+
+---
+
+Now run the ReAct loop and produce the `Genomic_Variant_umbrella` object — one object per
+distinct variant, each with all fields (null when absent) + its `provenance`.

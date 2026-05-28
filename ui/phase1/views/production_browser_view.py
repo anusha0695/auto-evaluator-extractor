@@ -90,4 +90,16 @@ def render(*, run) -> None:
 
     st.caption(f"Production schema · {len(kept)} mapped fields · {dropped} v3-only fields hidden "
                "· select a field → highlight + linked + agent trace (same as Entity browser)")
+    # Optional pipeline flowchart — orientation for the trace below. Off by default
+    # so it doesn't crowd the browser; flip on for orientation or when explaining the
+    # loop-back to a reviewer.
+    if st.toggle("Show pipeline flowchart", value=False, key="prod_show_flowchart",
+                 help="Render the pipeline diagram (triage repair loop + VMAW branch) above the entity explorer."):
+        from ui.phase1.field_view import pipeline_flow_svg
+        # `st.markdown(..., unsafe_allow_html=True)` strips `<defs>` / `<marker>`,
+        # which kills the arrowheads. Render the raw SVG via components.html instead.
+        components.html(
+            f'<div style="background:#fff;padding:8px;border-radius:8px;">{pipeline_flow_svg()}</div>',
+            height=440, scrolling=False,
+        )
     components.html(build_entity_explorer_html(payload, pages, height=760), height=900, scrolling=True)

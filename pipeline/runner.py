@@ -31,6 +31,41 @@ logger = logging.getLogger(__name__)
 PipelineVersion = Literal["v1", "v2", "v3", "v4"]
 
 
+# Pipeline version registry — adding a new version is one row here, no dispatch branch.
+# `kind` selects the graph (v1 = the Phase-1 baseline graph; `linear` = straight-line;
+# `selfcorrecting` = triage→repair loop + VMAW). The non-v1 rows thread their schema/
+# teams/registry paths through `build_graph_dependencies`; `enabled: false` in the
+# teams file is honoured everywhere via `enabled_team_keys` (a no-op for v2/v3, which
+# carry no toggle, so v2/v3 behaviour is byte-identical).
+_VERSIONS: dict[str, dict[str, str]] = {
+    "v1": {"kind": "v1"},
+    "v2": {
+        "kind": "linear",
+        "schema": "config/schemas/genomic_pathology_v3.json",
+        "teams": "config/teams.yaml",
+        "registry": "config/link_registry.yaml",
+        "ner_mapping": "config/ner_mapping.yaml",
+    },
+    "v3": {
+        "kind": "selfcorrecting",
+        "schema": "config/schemas/genomic_pathology_v3.json",
+        "teams": "config/teams.yaml",
+        "registry": "config/link_registry.yaml",
+        "ner_mapping": "config/ner_mapping.yaml",
+    },
+    "v4": {
+        "kind": "selfcorrecting",
+        "schema": "config/schemas/genomic_pathology_v4.json",
+        "teams": "config/teams_v4.yaml",
+        "registry": "config/link_registry_v4.yaml",
+        # v4 NER mapping: shares v3's recall-first routing. Cross-section dedup is the
+        # canonical correctness layer for v4 — see config/dedup_policy.yaml +
+        # Linker._apply_dedup_policy. NOT restricted at NER (extraction stays recall-first).
+        "ner_mapping": "config/ner_mapping.yaml",
+    },
+}
+
+
 @dataclass
 class RunResult:
     """Summary returned to the caller (CLI / Dataflow / tests)."""
@@ -87,10 +122,10 @@ async def run(
     """
     ObservabilityManager.init_from_env()
 
-    if version not in ("v1", "v2", "v3"):
+    if version not in _VERSIONS:
         raise PipelineError(
-            f"runner supports version='v1' (Phase 1), 'v2' (Phase 2a), and 'v3' "
-            f"(Phase 3 repair loop + VMAW); got {version!r}. v4 ships in Phase 4.",
+            f"runner supports versions {sorted(_VERSIONS)}; got {version!r}. "
+            f"Adding a new pipeline version is one row in _VERSIONS — no dispatch branch.",
             doc_id=doc_id,
             retry_safe=False,
         )
@@ -108,34 +143,44 @@ async def run(
         pipeline_version=version,
     )
 
-    # ----- Build dependencies + graph (dispatch by version) -----
-    if version == "v3":
-        # graph_selfcorrecting reuses the v2 dependency set (teams/linker/binding/router) and
-        # adds the triage→repair loop + VMAW on the escalate branch. VMAW LLM hooks
-        # default off → it degrades to "escalate to SME", but the escalation_queue /
-        # agent_trace / repair_log / vmaw_log artifacts the SME UI needs are produced.
-        if deps is None:
+    # ----- Build dependencies + graph (table-driven dispatch) -----
+    # Each version is one row in _VERSIONS — adding a new pipeline version is a
+    # config row, not a code branch. `kind` selects the graph (v1 / linear /
+    # selfcorrecting); `schema`/`teams`/`registry` thread through build_graph_dependencies.
+    if deps is None or graph is None:
+        spec = _VERSIONS[version]                                # validated above
+        if spec["kind"] == "v1":
+            if deps is None:
+                from pipeline.graph_v1 import build_graph_v1_dependencies
+                deps = build_graph_v1_dependencies()
+            if graph is None:
+                from pipeline.graph_v1 import build_graph_v1
+                graph = build_graph_v1(deps)
+        else:
+            # v2/v3/v4 — same dep builder; the spec selects schema/teams/registry and
+            # `enabled_team_keys` honours `enabled: false` (a no-op for v2/v3 which
+            # carry no toggle, so v2/v3 behaviour is unchanged).
+            import yaml as _yaml
+            from core.section_toggle import enabled_team_keys
             from pipeline.graph_linear import build_graph_dependencies
-            deps = build_graph_dependencies()
-        if graph is None:
-            from core.checkpointer import build_checkpointer
-            from pipeline.graph_selfcorrecting import build_selfcorrecting_graph
-            graph = build_selfcorrecting_graph(deps, checkpointer=build_checkpointer(deps.storage_config))
-    elif version == "v2":
-        if deps is None:
-            from pipeline.graph_linear import build_graph_dependencies
-            deps = build_graph_dependencies()
-        if graph is None:
-            from pipeline.graph_linear import build_linear_graph
-            from core.checkpointer import build_checkpointer
-            graph = build_linear_graph(deps, checkpointer=build_checkpointer(deps.storage_config))
-    else:
-        if deps is None:
-            from pipeline.graph_v1 import build_graph_v1_dependencies
-            deps = build_graph_v1_dependencies()
-        if graph is None:
-            from pipeline.graph_v1 import build_graph_v1
-            graph = build_graph_v1(deps)
+            teams_cfg = _yaml.safe_load(open(spec["teams"], encoding="utf-8"))
+            if deps is None:
+                deps = build_graph_dependencies(
+                    schema_path=spec["schema"],
+                    teams_yaml_path=spec["teams"],
+                    link_registry_path=spec["registry"],
+                    ner_mapping_path=spec["ner_mapping"],
+                    team_keys=enabled_team_keys(teams_cfg),
+                )
+            if graph is None:
+                from core.checkpointer import build_checkpointer
+                ckpt = build_checkpointer(deps.storage_config)
+                if spec["kind"] == "selfcorrecting":
+                    from pipeline.graph_selfcorrecting import build_selfcorrecting_graph
+                    graph = build_selfcorrecting_graph(deps, teams_cfg=teams_cfg, checkpointer=ckpt)
+                else:  # linear
+                    from pipeline.graph_linear import build_linear_graph
+                    graph = build_linear_graph(deps, checkpointer=ckpt)
 
     # ----- Build the seed state -----
     raw_pdf_bytes: bytes | None = None
@@ -193,9 +238,9 @@ async def run(
     # ----- Invoke the graph -----
     thread_id = f"{doc_id}-{uuid.uuid4().hex[:8]}"
     cfg = {"configurable": {"thread_id": thread_id}}
-    if version == "v3":
+    if version in ("v3", "v4"):
         # hard backstop for the triage→repair loop (recur-guard + budget terminate
-        # well before this; it only guards bugs).
+        # well before this; it only guards bugs). v4 shares the self-correcting graph.
         from pipeline.graph_selfcorrecting import GRAPH_RECURSION_LIMIT
         cfg["recursion_limit"] = GRAPH_RECURSION_LIMIT
 

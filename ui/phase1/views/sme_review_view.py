@@ -77,11 +77,13 @@ def render(*, run) -> None:
     pages = _pages(str(pdf_path)) if pdf_path else []
     pages_by_num = {p["page_number"]: p for p in pages}
 
-    tcol1, tcol2 = st.columns(2)
+    tcol1, tcol2, tcol3 = st.columns(3)
     technical = tcol1.toggle("Technical view", value=False,
                              help="Plain-language for reviewers · technical shows agents, nodes, refs, verdicts.")
     show_binding = tcol2.toggle("Show binding checks", value=False,
                                 help="Reveal the binding-verifier's per-check evidence in the trace.")
+    show_flowchart = tcol3.toggle("Show pipeline flowchart", value=False,
+                                  help="Render the pipeline diagram (triage repair loop + VMAW branch) above the trace.")
 
     col_q, col_main = st.columns([1, 3], gap="medium")
     with col_q:
@@ -128,9 +130,16 @@ def render(*, run) -> None:
                 _commit_decision(doc_id, item, approve=approve, edit=edit, keep=keep,
                                  edited=edited, proposal_value=prop.get("value"))
 
-        # agent trace — right under the decision, for the selected item
+        # agent trace — right under the decision, for the selected item.
+        # `show_flowchart=True` renders the pipeline diagram (triage repair loopback +
+        # VMAW branch) above the per-field timeline as orientation.
         st.markdown("##### How this field was processed")
-        render_trace(st, item.get("_trace") or [], technical=technical, show_binding=show_binding)
+        render_trace(
+            st, item.get("_trace") or [],
+            technical=technical, show_binding=show_binding,
+            ref=item.get("ref"), value=(item.get("proposal") or {}).get("value"),
+            show_flowchart=show_flowchart,
+        )
 
 
 def _queue_label(it: dict[str, Any]) -> str:

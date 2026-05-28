@@ -117,11 +117,36 @@ Final Answer: <single JSON object matching {{ schema_section_name }}'s schema>
 - **`{{ tool.name }}`** — {{ tool.description }}
 {% endfor %}
 
+## Reasoning trace — required even on single-shot extractions
+
+Before your `Final Answer`, emit a brief reasoning block in `<reasoning>` tags
+that records WHAT you found and WHY each populated field has the value it does.
+This is required even when you do not call any tools — it gives the downstream
+SME-review UI a visible thought process for this extraction. Keep it tight:
+
+```
+<reasoning>
+- Read page(s) <list> for this section.
+- Identified record(s): <one short line per finding, naming the source block /
+  table cell / sentence that grounds it>.
+- Skipped: <briefly note candidates you considered and rejected, with reason —
+  e.g. "JAK2 was a method header, not a finding">.
+- Confidence rationale: <one line on why your llm_confidence_score is what it is>.
+</reasoning>
+```
+
+Then on the NEXT line emit the JSON object. The reasoning block is parsed off
+the response; only the JSON is fed to the validator. Do not skip this block —
+the trace shows the SME exactly which line(s) of source text drove each value,
+and downstream agents (Coverage Auditor, Arbiter) read your reasoning to decide
+whether to accept or re-extract.
+
 ## Output format
 Your `Final Answer` MUST be a single JSON object with exactly the keys listed
-in the field contract above, and nothing else. Do not wrap it in markdown
-fences. Do not preface it with prose. The next message you emit after the
-final tool call is the JSON itself.
+in the field contract above, and nothing else (the `<reasoning>` block above
+sits OUTSIDE the JSON — do not put it inside the object). Do not wrap the JSON
+in markdown fences. The format is: the `<reasoning>...</reasoning>` block, a
+newline, then the raw JSON object.
 
 Include a top-level `llm_confidence_score` in [0.0, 1.0] reflecting your
 confidence that this object is correct end-to-end (not per-field). The

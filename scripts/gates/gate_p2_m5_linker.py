@@ -56,16 +56,15 @@ def main() -> int:
         },
     }
 
-    print("[1] assemble envelope")
+    print("[1] assemble envelope (generic — emits exactly what teams produced)")
     res = linker.link(sections=sections, blocks=[], block_profiles=[])
     env = res.envelope
-    five = ["report_metadata", "other_molecular_biomarker_umbrella",
-            "tested_biomarker_umbrella", "significant_findings", "clinical_information"]
-    check("all 5 sections present", all(k in env for k in five), str([k for k in five if k not in env]))
-    check("variant umbrella merged away", "Genomic_Variant_umbrella" not in env)
-    check("missing significant_findings filled empty",
-          env["significant_findings"]["specimen_findings"] == [])
-    check("count_of_extracted_objects computed", env["count_of_extracted_objects"] == 3 + 3, str(env["count_of_extracted_objects"]))
+    expected = set(sections.keys()) | {"count_of_extracted_objects"}
+    check("envelope emits exactly the produced sections (post-refactor: no v3 placeholders for teams that didn't run)",
+          set(env) == expected, str(set(env) ^ expected))
+    check("variant umbrella merged away (no genomic_variant_team in v3)", "Genomic_Variant_umbrella" not in env)
+    check("count_of_extracted_objects computed via config/section_layout.yaml",
+          env["count_of_extracted_objects"] == 3 + 3, str(env["count_of_extracted_objects"]))
 
     print("[2] gene-key links (incl. alias; variant_detail-gated)")
     types = [(l.from_ref, l.to_ref) for l in res.links if l.type == "variant_on_panel"]

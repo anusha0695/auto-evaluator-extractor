@@ -23,7 +23,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from agents.link_binding_verifier import LinkBindingVerifier
@@ -74,6 +74,10 @@ class GraphDependencies:
     recall_reread_fn: Any = None           # recall-floor AI re-read (true-absence vs real miss)
     normalizers: dict[str, Any] | None = None  # gap #2: {key → adapter} for renormalize_field
     triage_llm: Any = None                 # gap #7: triage tie-break (pick a team for an unteamable repair)
+    # V4-M6 (D3): sections whose owning team is disabled (e.g. significant_findings,
+    # clinical_information in v4). The verifier suite skips advisory misses for these so a
+    # deliberately-off section never floods the recall-floor / SME queue. Empty → no skip (v2/v3).
+    disabled_sections: set[str] = field(default_factory=set)
 
 
 def build_graph_dependencies(
@@ -83,6 +87,8 @@ def build_graph_dependencies(
     prompts_root: str = "config/prompts",
     tools_yaml_path: str = "config/tools.yaml",
     teams_yaml_path: str = "config/teams.yaml",
+    link_registry_path: str = "config/link_registry.yaml",
+    ner_mapping_path: str = "config/ner_mapping.yaml",
     team_keys: list[str] | None = None,
     # Optional LLM adjudicators (graph_linear runs deterministic + escalate if None):
     merge_adjudicator: Callable | None = None,
@@ -112,7 +118,7 @@ def build_graph_dependencies(
         docai_parser=docai,
         fax_filter=FaxHeaderFilter(),
         block_profiler=BlockProfiler(prompt_renderer=prompt_renderer),
-        medical_ner=SciSpaCyMedicalNER(prompt_renderer=prompt_renderer),
+        medical_ner=SciSpaCyMedicalNER(prompt_renderer=prompt_renderer, mapping_path=ner_mapping_path),
         persistence=persistence,
     )
 
@@ -136,6 +142,13 @@ def build_graph_dependencies(
 
     teams_cfg = yaml.safe_load(open(teams_yaml_path, encoding="utf-8"))
     keys = team_keys or PHASE_2A_TEAM_KEYS
+    # V4-M4 (D3): honor the declarative `enabled: false` toggle in the team registry.
+    # Subtractive + order-preserving + a safe no-op when no team is disabled (the v3
+    # teams.yaml carries no `enabled` key), so v2/v3 behavior is unchanged.
+    from core.section_toggle import disabled_sections as _disabled_sections
+    from core.section_toggle import filter_enabled_keys
+    keys = filter_enabled_keys(keys, teams_cfg)
+    _disabled_secs = _disabled_sections(teams_cfg)
     teams = {
         k: build_section_team(
             k, teams_cfg=teams_cfg, schema_loader=schema_loader,
@@ -149,12 +162,15 @@ def build_graph_dependencies(
     # LINK_SEED=0/false/no flips to the pure-contextual A/B arm (seed hints only).
     from agents.link_registry import LinkRegistry
     try:
-        _link_registry = LinkRegistry.from_path("config/link_registry.yaml", max_tier=2)
+        _link_registry = LinkRegistry.from_path(link_registry_path, max_tier=2)
     except Exception as exc:  # noqa: BLE001 — degrade to legacy validation
         logger.warning("graph_linear: link registry unavailable (%s) → legacy link validation", exc)
         _link_registry = None
     _link_seed_enabled = os.environ.get("LINK_SEED", "1").lower() not in ("0", "false", "no", "off")
 
+    # Linker assembly is now fully generic — it emits exactly the sections the active
+    # teams produce (in registry order). Adding a new team/section is a pure config
+    # change (teams_*.yaml + schema + config/section_layout.yaml). No version branch here.
     linker = Linker(
         merge_adjudicator=merge_adjudicator,
         link_adjudicator=link_adjudicator,
@@ -198,12 +214,50 @@ def build_graph_dependencies(
         decision_router=DecisionRouter(),
         attribution_fn=_attribution_fn, vmaw_hooks=_vmaw_hooks, recall_reread_fn=_recall_reread_fn,
         normalizers=_normalizers, triage_llm=_triage_llm,
+        disabled_sections=_disabled_secs,
     )
 
 
 # ---------------------------------------------------------------------------
 # Pure helpers (unit-testable; no cloud/LLM)
 # ---------------------------------------------------------------------------
+
+
+# Advisory verifiers whose misses are noise for a deliberately-disabled section.
+# schema_validator is NOT here — a structural error is real regardless of toggle.
+_ADVISORY_VERIFIERS = ("recall_floor", "attribution", "normalization", "hgvs_validity")
+
+
+def _error_section(e: dict[str, Any]) -> str | None:
+    """Top-level schema section a verifier field_error points at (loc/field_name/ref)."""
+    loc = e.get("loc") or e.get("field_name") or e.get("ref") or ""
+    if isinstance(loc, (list, tuple)):
+        return str(loc[0]) if loc else None
+    head = str(loc).split(".")[0].split("[")[0]
+    return head or None
+
+
+def drop_disabled_section_errors(
+    scorecards: list[dict[str, Any]], disabled_sections: set[str] | None,
+) -> int:
+    """V4-M6 (D3): drop ADVISORY verifier field_errors that point at a disabled section
+    (its blocks are never extracted, so a 'present but empty' miss there is noise that
+    would flood the SME queue). Mutates `scorecards` in place; annotates `notes`.
+    Returns the number of errors dropped. No-op (returns 0) when disabled_sections is
+    empty/None — so v2/v3 are unchanged. schema_validator is never touched."""
+    if not disabled_sections:
+        return 0
+    total = 0
+    for sc in scorecards:
+        if sc.get("verifier_name") in _ADVISORY_VERIFIERS and sc.get("field_errors"):
+            kept = [e for e in sc["field_errors"] if _error_section(e) not in disabled_sections]
+            dropped = len(sc["field_errors"]) - len(kept)
+            if dropped:
+                sc["field_errors"] = kept
+                sc["notes"] = (sc.get("notes", "") +
+                               f" [v4: -{dropped} miss(es) for disabled section(s)]").strip()
+                total += dropped
+    return total
 
 
 def assemble_and_link(
@@ -236,6 +290,7 @@ def run_verifier_suite(
     block_reads: dict[str, Any] | None = None,
     binding_items_out: list[dict[str, Any]] | None = None,
     attribution_fn: Any | None = None,
+    disabled_sections: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Run schema + the deterministic verifiers (incl. P3-M3 recall floor) + the
     binding verifier. Returns (scorecards, binding_summary).
@@ -245,7 +300,8 @@ def run_verifier_suite(
     (→ accept). Both default None → the M3 advisory behavior (no regression)."""
     scorecards: list[dict[str, Any]] = []
 
-    _passed_raw, errors = SchemaValidator(schema_loader=schema_loader).validate_envelope(envelope)
+    _passed_raw, errors = SchemaValidator(schema_loader=schema_loader).validate_envelope(
+        envelope, disabled_sections=disabled_sections)
     # Split STRUCTURAL (shape/type/required/unknown-key — hard fail) from
     # COSMETIC (pattern/format/min/max — quality notes, non-fatal). The teams
     # validate with Pydantic (no pattern/format/min), so a cosmetic jsonschema
@@ -299,6 +355,33 @@ def run_verifier_suite(
     except Exception:
         logger.exception("run_verifier_suite: normalization verifier failed (non-fatal)")
 
+    # V4-M6: HGVS structural-validity floor (the OTHER half of normalization —
+    # a printed HGVS change that is genuinely MALFORMED with no canonical at all).
+    # Section-agnostic (walks coding/genomic/amino leaves anywhere); ADVISORY
+    # (passed=True — it routes via the `invalid_hgvs` defect → needs_review, NEVER
+    # renormalize, since there is no canonical to write). Safe no-op on v3 envelopes
+    # with clean HGVS. Defensive: a failure here must never sink the suite.
+    try:
+        from verification.hgvs_validity import find_malformed_hgvs
+        malformed = find_malformed_hgvs(envelope)
+        scorecards.append({
+            "verifier_name": "hgvs_validity", "passed": True,
+            "field_errors": malformed,
+            "notes": ("no malformed HGVS" if not malformed
+                      else f"{len(malformed)} malformed HGVS leaf(s) → needs_review"),
+        })
+    except Exception:
+        logger.exception("run_verifier_suite: hgvs_validity verifier failed (non-fatal)")
+
+    # V4-M6 (D3): a deliberately-disabled section (e.g. significant_findings,
+    # clinical_information in v4) must not generate advisory misses — its blocks are
+    # never extracted, so a recall-floor "present but empty" or an attribution/normalization
+    # note against it is noise that would flood the SME queue. Drop those field_errors
+    # from the ADVISORY verifiers (NOT schema_validator — a structural error is still real).
+    # Section-agnostic + a no-op when disabled_sections is empty (v2/v3 unchanged).
+    if disabled_sections:
+        drop_disabled_section_errors(scorecards, disabled_sections)
+
     vres = binding_verifier.verify(
         envelope=envelope, links=links, blocks=blocks, parser_hypothesis=parser_hypothesis,
     )
@@ -342,8 +425,18 @@ def _make_planner_node(*, planner: Planner, teams_cfg: dict[str, Any], team_keys
     @otel_trace("pipeline.graph_linear.planner_node")
     async def planner_node(state: PipelineState) -> dict[str, Any]:
         plan = planner.plan(state, teams_cfg=teams_cfg, team_keys=team_keys)
+        # Record planner decision as a trace step (which teams activated vs skipped).
+        from core.trace_recorder import extend_trace, record
+        skipped = [k for k in team_keys if k not in (plan.active_team_keys or [])]
+        rec = record(
+            phase="planning", agent="Planner",
+            plain="Our system decided which extraction teams should run for this document.",
+            input_summary=f"{len(team_keys)} candidate team(s)",
+            output_summary=f"active={list(plan.active_team_keys or [])} skipped={skipped}",
+            verdict="planned", reasoning=str(plan.rationale or ""))
         return {"active_team_keys": plan.active_team_keys,
-                "planner_rationale": plan.rationale}
+                "planner_rationale": plan.rationale,
+                "agent_trace": extend_trace(state.get("agent_trace"), rec)}
     return planner_node
 
 
@@ -357,7 +450,7 @@ def _make_teams_node(*, teams: dict[str, Any]):
         section_outputs: dict[str, Any] = {}
         team_outputs = dict(state.get("team_outputs") or {})
         team_results: dict[str, Any] = {}
-        agent_trace: list[dict[str, Any]] = []
+        team_records: list[dict[str, Any]] = []
         for key, r in zip(active, results):
             team_results[key] = {
                 "verdict": r.verdict,
@@ -370,11 +463,14 @@ def _make_teams_node(*, teams: dict[str, Any]):
             # P3-M8b: per-agent trace (PHI-safe summaries) for the SME UI.
             try:
                 from pipeline.agent_trace import build_team_trace
-                agent_trace.extend(build_team_trace(r, team_key=key))
+                team_records.extend(build_team_trace(r, team_key=key))
             except Exception:
                 logger.exception("teams_node: agent-trace assembly failed (non-fatal)")
+        # APPEND team records to the accumulating trace (preserves planner step, etc.).
+        from core.trace_recorder import extend_trace
         return {"section_outputs": section_outputs, "team_outputs": team_outputs,
-                "team_results": team_results, "agent_trace": agent_trace}
+                "team_results": team_results,
+                "agent_trace": extend_trace(state.get("agent_trace"), *team_records)}
     return teams_node
 
 
@@ -382,13 +478,16 @@ def _make_linker_node(*, linker: Linker, persistence: Any = None):
     @otel_trace("pipeline.graph_linear.linker_node")
     async def linker_node(state: PipelineState) -> dict[str, Any]:
         dp = state.get("doc_profile") or {}
-        envelope, links, nrev = assemble_and_link(
-            linker=linker,
-            section_outputs=state.get("section_outputs") or {},
+        # Call the linker directly (instead of the assemble_and_link helper) so we can
+        # lift its dedup_drops / supersession_events / dropped_contextual_links into
+        # the unified agent_trace.
+        res = linker.link(
+            sections=state.get("section_outputs") or {},
             blocks=dp.get("blocks") or [],
             block_profiles=dp.get("block_profiles") or [],
             relink_hints=state.get("relink_hints") or [],
         )
+        envelope, links, nrev = res.envelope, res.links, res.needs_review_refs
         links_dicts = [vars(l) if not isinstance(l, dict) else l for l in links]
         # Persist the assembled envelope EVERY run (not only auto_accept) so the
         # UI / SME can review it regardless of verdict.
@@ -399,7 +498,101 @@ def _make_linker_node(*, linker: Linker, persistence: Any = None):
                     kind="extraction_v2", content=json.dumps(envelope, indent=2, default=str))
             except Exception:
                 logger.exception("linker_node: failed to persist extraction_v2 artifact")
-        return {"extraction": envelope, "links": links_dicts, "link_needs_review": nrev}
+        # Trace: assembly summary + per-link committed + per-link dropped (contextual)
+        # + per-dedup-drop + per-supersession-event. The field timeline lands on these
+        # whenever a focused ref shares an array-token with a record's refs.
+        from core.trace_recorder import extend_trace, record
+        recs: list[dict[str, Any]] = []
+        sec_names = sorted(set(envelope.keys()) - {"count_of_extracted_objects"})
+        # Self-describe: what link types did we consider, between which sections, and
+        # what validation criteria does every emitted link have to pass?
+        considered_types: list[str] = []
+        considered_summary = ""
+        try:
+            reg = getattr(linker, "_registry", None)
+            if reg is not None:
+                actives = list(reg.active_types())
+                considered_types = [t.type for t in actives]
+                considered_summary = "; ".join(
+                    f"{t.type} ({t.from_section} ↔ {t.to_section})" for t in actives)
+        except Exception:  # noqa: BLE001 — trace must not break the run
+            considered_summary = ""
+        n_dropped = len(getattr(res, "dropped_contextual_links", None) or [])
+        emit_summary = ""
+        if links_dicts:
+            kinds = sorted({lk.get("type", "?") for lk in links_dicts})
+            emit_summary = f"emitted {len(links_dicts)} link(s) [{', '.join(kinds)}]"
+        else:
+            emit_summary = "emitted 0 link(s)"
+        linker_why = (
+            "Considered each registered link type. For every type, walked both endpoint "
+            "sections and matched records by HGNC-canonical gene key. Self-typed pairs "
+            "(from_section == to_section) require i ≠ j so a record can't link to itself. "
+            "Every emitted link is then deterministically validated — type ∈ registry, "
+            "endpoint sections match the registered pair, both refs resolve in the envelope, "
+            "evidence_block_ids are cited, confidence ≥ floor. Invalid drops were recorded "
+            "in the linker's dropped_contextual_links channel."
+        )
+        recs.append(record(
+            phase="linking", agent="Linker",
+            plain=("Our system stitched the teams' outputs into a single record set, considered every "
+                   "kind of cross-section link, then ran dedup and supersession on top."),
+            input_summary=f"{len(state.get('section_outputs') or {})} team section(s); "
+                          f"considered link types: [{', '.join(considered_types) or '—'}]",
+            output_summary=(f"assembled {len(sec_names)} section(s); {emit_summary}; "
+                            f"{n_dropped} contextual drop(s); {len(nrev)} needs_review ref(s)"),
+            verdict="assembled",
+            reasoning=(linker_why + ((" Considered pairings: " + considered_summary)
+                                     if considered_summary else "")),
+            extras={"considered_link_types": considered_types}))
+        for lk in links_dicts:
+            typ = lk.get("type", "related")
+            recs.append(record(
+                phase="linking", agent=f"Linker · {typ}",
+                plain=f"Our system linked two records as a {typ.replace('_', ' ')} relationship.",
+                refs=[lk.get("from_ref") or "", lk.get("to_ref") or ""],
+                input_summary=f"type {typ} · method={lk.get('method','?')}",
+                output_summary=(f"{lk.get('from_ref')} ↔ {lk.get('to_ref')} · validated "
+                                f"(refs resolve, type ∈ registry, evidence cited, confidence ≥ floor)"),
+                verdict=str(lk.get("method") or "linked"),
+                confidence=lk.get("confidence"),
+                reasoning=str(lk.get("rationale") or "")))
+        # Dropped contextual links — the why-the-adjudicator's-proposal-didn't-make-it.
+        for dl in (getattr(res, "dropped_contextual_links", None) or []):
+            recs.append(record(
+                phase="linking",
+                agent=f"Linker · contextual_dropped · {dl.get('type','?')}",
+                plain="The contextual link adjudicator proposed a link, but a deterministic check rejected it (so it wasn't committed).",
+                refs=[dl.get("from_ref") or "", dl.get("to_ref") or ""],
+                input_summary=f"stage={dl.get('stage','?')}",
+                output_summary=f"dropped {dl.get('type','?')} {dl.get('from_ref')} ↔ {dl.get('to_ref')}",
+                verdict="dropped",
+                reasoning=str(dl.get("reason") or "")))
+        # Supersession — when an addendum amends or flags a finding.
+        for se in (getattr(res, "supersession_events", None) or []):
+            recs.append(record(
+                phase="supersession",
+                agent="Linker · Supersession" + (" (resolved)" if se.get("resolved") else " (needs_review)"),
+                plain=("An addendum block referred back to an earlier finding — our system marked the "
+                       "finding for review as a possible amendment."),
+                refs=[se.get("ref") or ""],
+                input_summary=f"addendum_block={se.get('addendum_block_id','?')}",
+                output_summary=str(se.get("detail") or ""),
+                verdict="superseded" if se.get("resolved") else "needs_review",
+                reasoning=str(se.get("detail") or "")))
+        # Dedup — one record per cross-section duplicate dropped.
+        for dd in (getattr(res, "dedup_drops", None) or []):
+            recs.append(record(
+                phase="dedup", agent=f"Linker · Dedup · {dd.get('owning_section','?')} owns",
+                plain=("The same entity appeared in two sections — our system kept the canonical "
+                       "owner's record and dropped the duplicate from the lower-priority section."),
+                section=dd.get("section"), refs=[dd.get("ref") or ""],
+                input_summary=f"gene={dd.get('gene','?')}",
+                output_summary=f"dropped {dd.get('ref')} (owning {dd.get('owning_section')})",
+                verdict="dropped",
+                reasoning=str(dd.get("rule") or "")))
+        return {"extraction": envelope, "links": links_dicts, "link_needs_review": nrev,
+                "agent_trace": extend_trace(state.get("agent_trace"), *recs)}
     return linker_node
 
 

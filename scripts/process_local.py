@@ -260,9 +260,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Process every .pdf under the given gs://bucket/prefix/.",
     )
     p.add_argument(
-        "--version", default="v1", choices=["v1", "v2", "v3"],
+        "--version", default="v1", choices=["v1", "v2", "v3", "v4"],
         help="Pipeline version (default: v1; v2 = Phase 2a genomic umbrellas + clinical; "
-             "v3 = Phase 3 repair loop + VMAW + SME review artifacts).",
+             "v3 = Phase 3 repair loop + VMAW + SME review artifacts; "
+             "v4 = mCODE genomic_pathology 4-section registry w/ section toggle).",
     )
     p.add_argument(
         "--doc-id", metavar="ID",

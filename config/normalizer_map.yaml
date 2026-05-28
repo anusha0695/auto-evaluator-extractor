@@ -18,3 +18,8 @@ normalizable_fields:
   coding_dna_change: hgvs
   genomic_dna_change: hgvs
   amino_acid_change: hgvs
+  # v4: gene-symbol canonicalization on the Genomic_Variant section's gene field
+  # (revives the HGNC verification that was never wired at the leaf level — only an
+  # EXACT alias canonicalization auto-flags; fuzzy/ambiguous leave it to needs_review).
+  gene_studied: hgnc
+  gene_symbol: hgnc

@@ -79,8 +79,28 @@ def render(*, run: Any) -> None:  # pragma: no cover (Streamlit UI)
                 if c.get("error_locs"):
                     st.caption(f"error locations: {c['error_locs']}")
 
-    # ----- Biomarkers (findings[] grouping; sequence variants carry a
-    #       nested variant_detail — v3 merge folded the variant umbrella here) --
+    # ----- Genomic variants (v4: REVIVED separate Genomic_Variant_umbrella) ---
+    # v3 has no such section → the block is skipped. v4 routes gene SEQUENCE variants
+    # here (out of the biomarker umbrella), one FLAT record per variant.
+    variants = (envelope.get("Genomic_Variant_umbrella") or {}).get("Genomic_Variants") or []
+    if variants:
+        st.subheader(f"🧬 Genomic variants ({len(variants)})")
+        st.dataframe([
+            {
+                "gene": v.get("gene_studied"), "method": v.get("method"), "result": v.get("result"),
+                "c.": v.get("coding_dna_change"), "p.": v.get("amino_acid_change"),
+                "g.": v.get("genomic_dna_change"), "VAF": v.get("variant_allele_frequency"),
+                "significance": v.get("clinical_significance"),
+                "source_class": v.get("genomic_source_class"),
+                "needs_review": bool(v.get("needs_review")),
+            }
+            for v in variants
+        ], use_container_width=True)
+
+    # ----- Biomarkers ---------------------------------------------------------
+    # Shape-tolerant: v3 groups results under a nested `findings[]` (a sequence variant
+    # carries a nested `variant_detail`); v4 is FLAT (the record IS the result — no
+    # findings[], no variant_detail; variants live in Genomic_Variant_umbrella above).
     biomarkers = (envelope.get("other_molecular_biomarker_umbrella") or {}).get("other_molecular_biomarkers") or []
     st.subheader(f"🔬 Biomarkers ({len(biomarkers)})")
     for bm in biomarkers:
@@ -89,17 +109,25 @@ def render(*, run: Any) -> None:  # pragma: no cover (Streamlit UI)
         cls_tag = f"  ·  _{cls}_" if cls else ""
         st.markdown(f"**{bm.get('biomarker_name')}**{cls_tag}{flag}")
         rows = []
-        for f in (bm.get("findings") or []):
-            vd = f.get("variant_detail") or {}
-            variant = None
-            if isinstance(vd, dict) and vd:
-                variant = vd.get("amino_acid_change") or vd.get("coding_dna_change")
+        findings = bm.get("findings")
+        if isinstance(findings, list) and findings:                  # v3 nested shape
+            for f in findings:
+                vd = f.get("variant_detail") or {}
+                variant = None
+                if isinstance(vd, dict) and vd:
+                    variant = vd.get("amino_acid_change") or vd.get("coding_dna_change")
+                rows.append({
+                    "method": f.get("method"), "result": f.get("result"),
+                    "variant": variant,  # 🧬 set only for sequence-variant findings
+                    "interpretation": f.get("interpretation"), "assertion": f.get("assertion"),
+                    "method_source": f.get("method_source_type"),
+                    "occurrences": len(f.get("occurrences") or []),
+                })
+        else:                                                        # v4 FLAT shape
             rows.append({
-                "method": f.get("method"), "result": f.get("result"),
-                "variant": variant,  # 🧬 set only for sequence-variant findings
-                "interpretation": f.get("interpretation"), "assertion": f.get("assertion"),
-                "method_source": f.get("method_source_type"),
-                "occurrences": len(f.get("occurrences") or []),
+                "method": bm.get("method"), "result": bm.get("result"),
+                "reference_range": bm.get("reference_range"),
+                "interpretation": bm.get("interpretation"),
             })
         st.dataframe(rows, use_container_width=True)
 
@@ -110,13 +138,16 @@ def render(*, run: Any) -> None:  # pragma: no cover (Streamlit UI)
         st.write(", ".join(map(str, panel)))
 
     # ----- Clinical information ------------------------------------------
-    clin = envelope.get("clinical_information") or {}
-    st.subheader("📋 Clinical information")
-    st.json({
-        "reason_for_study": clin.get("reason_for_study"),
-        "clinical_finding_details": clin.get("clinical_finding_details"),
-        "clinical_history": clin.get("clinical_history"),
-    })
+    # Guarded: in v4 this section is DISABLED (absent from the envelope) — don't render
+    # an empty null card. v2/v3 always carry the key, so it renders as before.
+    if "clinical_information" in envelope:
+        clin = envelope.get("clinical_information") or {}
+        st.subheader("📋 Clinical information")
+        st.json({
+            "reason_for_study": clin.get("reason_for_study"),
+            "clinical_finding_details": clin.get("clinical_finding_details"),
+            "clinical_history": clin.get("clinical_history"),
+        })
 
     # ----- Cross-section links -------------------------------------------
     links = (verification or {}).get("links") or []
@@ -129,23 +160,26 @@ def render(*, run: Any) -> None:  # pragma: no cover (Streamlit UI)
         ], use_container_width=True)
 
     # ----- significant_findings (Phase 2b) -------------------------------
-    sf = (envelope.get("significant_findings") or {}).get("specimen_findings") or []
-    st.subheader("🧫 Significant findings")
-    if sf:
-        for i, entry in enumerate(sf):
-            specs = entry.get("specimen") or []
-            label = ", ".join(f"{s.get('specimen_id')}: {s.get('tissue_type')}" for s in specs) or f"specimen {i}"
-            st.markdown(f"**{label}**")
-            tn = entry.get("pTNM_staging_details") or {}
-            ln = entry.get("lymph_node_details") or {}
-            st.json({
-                "procedure": (entry.get("procedure_details") or {}).get("procedure"),
-                "histologic_findings": [h.get("finding") for h in (entry.get("histologic_findings") or [])],
-                "pTNM_stage": tn.get("pTNM_stage"),
-                "staging_system_version": tn.get("staging_system_version"),
-                "lymph_nodes": {"status": ln.get("lymph_node_status"),
-                                "examined": ln.get("number_of_lymph_nodes_examined"),
-                                "positive": ln.get("number_of_lymph_nodes_positive")},
-            })
-    else:
-        st.caption("No surgical-pathology content in this report (e.g. a molecular/PCR assay) — `specimen_findings` empty, as expected.")
+    # Guarded: DISABLED in v4 (absent from the envelope) → skip the section entirely so
+    # a disabled team renders nothing. v2/v3 always carry the key, so it renders as before.
+    if "significant_findings" in envelope:
+        sf = (envelope.get("significant_findings") or {}).get("specimen_findings") or []
+        st.subheader("🧫 Significant findings")
+        if sf:
+            for i, entry in enumerate(sf):
+                specs = entry.get("specimen") or []
+                label = ", ".join(f"{s.get('specimen_id')}: {s.get('tissue_type')}" for s in specs) or f"specimen {i}"
+                st.markdown(f"**{label}**")
+                tn = entry.get("pTNM_staging_details") or {}
+                ln = entry.get("lymph_node_details") or {}
+                st.json({
+                    "procedure": (entry.get("procedure_details") or {}).get("procedure"),
+                    "histologic_findings": [h.get("finding") for h in (entry.get("histologic_findings") or [])],
+                    "pTNM_stage": tn.get("pTNM_stage"),
+                    "staging_system_version": tn.get("staging_system_version"),
+                    "lymph_nodes": {"status": ln.get("lymph_node_status"),
+                                    "examined": ln.get("number_of_lymph_nodes_examined"),
+                                    "positive": ln.get("number_of_lymph_nodes_positive")},
+                })
+        else:
+            st.caption("No surgical-pathology content in this report (e.g. a molecular/PCR assay) — `specimen_findings` empty, as expected.")
