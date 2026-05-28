@@ -33,8 +33,22 @@ _REF_RE = re.compile(r"([A-Za-z_]+)|\[(\d+)\]")
 
 def build_review_model(doc_id: str, *, load: Callable[[str, str], Any]) -> dict[str, Any]:
     """Assemble the SME review model for a doc. `load(doc_id, kind)` returns the
-    parsed artifact (inject `data_layer.load_artifact` in the app, a fake in tests)."""
+    parsed artifact (inject `data_layer.load_artifact` in the app, a fake in tests).
+
+    Banding: prefers the new `escalation_queue_banded` artifact (4 SME-priority
+    bands — judgment, unresolved, review_light, drop_audit). Falls back to the
+    legacy `escalation_queue` artifact and bands client-side, so older runs still
+    render correctly."""
+    # Prefer the persisted banded artifact; fall back to legacy queue + band here.
+    banded = load(doc_id, "escalation_queue_banded")
     queue = list(load(doc_id, "escalation_queue") or [])
+    if not banded:
+        try:
+            from pipeline.vmaw import band_escalation_queue
+            banded = band_escalation_queue(queue)
+        except Exception:
+            banded = None
+
     agent_trace = load(doc_id, "agent_trace") or []
     repair_log = load(doc_id, "repair_log") or []
     vmaw_log = load(doc_id, "vmaw_log") or []
@@ -44,15 +58,7 @@ def build_review_model(doc_id: str, *, load: Callable[[str, str], Any]) -> dict[
     extraction = load(doc_id, "extraction_reviewed") or load(doc_id, "extraction_v2") or {}
     rationales = field_rationale_map(extraction if isinstance(extraction, dict) else {})
 
-    def rank(it: dict[str, Any]) -> int:
-        if it.get("vmaw_proposal"):
-            return 0                      # closest to done — review first
-        if it.get("vmaw_note"):
-            return 1                      # VMAW tried, couldn't settle
-        return 2
-
-    items: list[dict[str, Any]] = []
-    for it in sorted(queue, key=rank):
+    def _enrich(it: dict[str, Any]) -> dict[str, Any]:
         enriched = dict(it)
         enriched["_trace"] = assemble_field_trace(
             ref=it.get("ref"), section=it.get("section"),
@@ -61,16 +67,42 @@ def build_review_model(doc_id: str, *, load: Callable[[str, str], Any]) -> dict[
             binding_items=binding_items, field_rationale=rationales.get(it.get("ref"), ""))
         enriched["_plain"] = explain(it, mode="plain")
         enriched["_technical"] = explain(it, mode="technical")
-        items.append(enriched)
+        return enriched
 
+    # Flat items list (legacy callers still get this). Ordered by band priority,
+    # within band by VMAW proposal-readiness.
+    def rank(it: dict[str, Any]) -> int:
+        if it.get("vmaw_proposal"):
+            return 0
+        if it.get("vmaw_note"):
+            return 1
+        return 2
+
+    # Per-band enriched lists (new shape callers should prefer).
+    bands_out: dict[str, list[dict[str, Any]]] = {
+        "judgment": [], "unresolved": [], "review_light": [], "drop_audit": []}
+    if banded and isinstance(banded, dict) and "bands" in banded:
+        for band_name in ("judgment", "unresolved", "review_light", "drop_audit"):
+            for it in sorted(banded["bands"].get(band_name, []), key=rank):
+                bands_out[band_name].append(_enrich(it))
+    items_flat = (bands_out["judgment"] + bands_out["unresolved"]
+                  + bands_out["review_light"] + bands_out["drop_audit"])
+
+    band_counts = {b: len(bands_out[b]) for b in bands_out}
     counts = {
-        "queue": len(items),
-        "proposals": sum(1 for it in items if it.get("vmaw_proposal")),
-        "unresolved": sum(1 for it in items if it.get("vmaw_note") and not it.get("vmaw_proposal")),
+        # legacy counters (kept for back-compat)
+        "queue": len(items_flat),
+        "proposals": sum(1 for it in items_flat if it.get("vmaw_proposal")),
+        "unresolved": band_counts["unresolved"],
         "auto_applied": sum(1 for v in vmaw_log
                             if (v.get("resolution") or {}).get("status") == "auto_applied"),
+        # new banding KPIs
+        "judgment":        band_counts["judgment"],
+        "review_light":    band_counts["review_light"],
+        "drop_audit":      band_counts["drop_audit"],
+        "blocks_workflow": band_counts["judgment"] + band_counts["unresolved"],
     }
-    return {"doc_id": doc_id, "items": items, "counts": counts}
+    return {"doc_id": doc_id, "items": items_flat, "bands": bands_out, "counts": counts}
 
 
 # -- decision apply ---------------------------------------------------------

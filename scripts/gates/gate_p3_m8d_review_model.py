@@ -49,9 +49,24 @@ def main() -> int:
 
     print("[1] build_review_model")
     model = build_review_model("demo", load=load)
-    check("proposal item sorted first", model["items"][0].get("vmaw_proposal") is not None)
+    # New banding contract: items are concatenated in priority order
+    # (judgment → unresolved → review_light → drop_audit) so the first item is
+    # always from the highest-priority non-empty band. In this fixture the
+    # unresolved item (kind='unresolved') ranks ahead of the grounded+uncontested
+    # proposal (kind='needs_review' → review_light), because unresolved blocks
+    # the workflow and review_light is a one-click rubber-stamp.
+    check("blocking-band item sorted first (unresolved before review_light)",
+          (model["items"][0].get("vmaw_note") or {}).get("status") == "unresolved")
+    check("review_light item sorted after blocking items",
+          (model["items"][-1].get("vmaw_proposal") or {}).get("grounded") is True)
     check("each item enriched with trace + explanations",
           all("_trace" in it and "_plain" in it and "_technical" in it for it in model["items"]))
+    bands = model.get("bands") or {}
+    check("model carries per-band buckets",
+          set(bands.keys()) >= {"judgment", "unresolved", "review_light", "drop_audit"})
+    check("unresolved band has 1 item", len(bands.get("unresolved", [])) == 1)
+    check("review_light band has 1 item", len(bands.get("review_light", [])) == 1)
+    check("blocks_workflow KPI present", "blocks_workflow" in model["counts"])
     check("counts: queue=2, proposals=1, auto_applied=1",
           model["counts"]["queue"] == 2 and model["counts"]["proposals"] == 1
           and model["counts"]["auto_applied"] == 1, str(model["counts"]))

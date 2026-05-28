@@ -59,13 +59,29 @@ def render(*, run) -> None:
 
     model = build_review_model(doc_id, load=load_artifact)
     items = model["items"]
+    bands = model.get("bands") or {}
     c = model["counts"]
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("SME queue", c["queue"])
-    m2.metric("VMAW proposals", c["proposals"])
-    m3.metric("Unresolved", c["unresolved"])
-    m4.metric("VMAW auto-applied", c["auto_applied"])
+    # Top KPI row. The headline number is `blocks_workflow` (judgment +
+    # unresolved) — those are the items that gate doc commit. review_light is
+    # one-click rubber-stamp, drop_audit is periodic sampling — both surfaced
+    # but not blocking.
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("⛔ Blocks workflow",
+              c.get("blocks_workflow", c["queue"]),
+              help="Items SME must clear before this doc can be committed (judgment + unresolved).")
+    m2.metric("👤 Judgment", c.get("judgment", 0),
+              help="Real decisions — contested or ungrounded.")
+    m3.metric("🤔 Unresolved", c.get("unresolved", 0),
+              help="VMAW exhausted every capability — needs investigation.")
+    m4.metric("✅ Review-light", c.get("review_light", 0),
+              help="VMAW landed grounded+uncontested proposals — quick rubber-stamp.")
+    m5.metric("📦 Drop audit", c.get("drop_audit", 0),
+              help="Records VMAW dropped — periodic audit, non-blocking.")
+
+    auto_applied = c.get("auto_applied", 0)
+    if auto_applied:
+        st.caption(f"💡 VMAW auto-applied **{auto_applied}** item(s) silently — they never reached this queue.")
 
     if not items:
         st.success("Nothing needs review — every section was auto-accepted or auto-resolved. ✅")
@@ -85,12 +101,60 @@ def render(*, run) -> None:
     show_flowchart = tcol3.toggle("Show pipeline flowchart", value=False,
                                   help="Render the pipeline diagram (triage repair loop + VMAW branch) above the trace.")
 
+    # Banded queue. 4 expandable groups in priority order. Blocking bands
+    # (judgment + unresolved) open by default; review_light + drop_audit
+    # collapsed — open when ready. review_light has a batch-approve button.
+    _BAND_META = {
+        "judgment":     {"label": "👤 Judgment",     "default_open": True,
+                         "blurb": "Real decisions — read the source, pick a value."},
+        "unresolved":   {"label": "🤔 Unresolved",   "default_open": True,
+                         "blurb": "VMAW exhausted EC + CITE + VA. Investigate from scratch."},
+        "review_light": {"label": "✅ Review-light", "default_open": False,
+                         "blurb": "VMAW found a clean grounded answer. Spot-check or batch-approve."},
+        "drop_audit":   {"label": "📦 Drop audit",   "default_open": False,
+                         "blurb": "Records VMAW dropped from the envelope. Audit periodically."},
+    }
+
     col_q, col_main = st.columns([1, 3], gap="medium")
     with col_q:
-        st.caption("Queue · proposals first")
-        labels = [_queue_label(it) for it in items]
-        sel = st.radio("queue", options=list(range(len(items))),
-                       format_func=lambda i: labels[i], label_visibility="collapsed")
+        st.caption("Queue · grouped by band")
+        # `items` is band_order-concatenated (judgment, then unresolved, then
+        # review_light, then drop_audit), so a flat index over `items` is
+        # equivalent to walking each band in order. We use ONE st.radio per
+        # band (keyed independently) and translate the picked option back into
+        # the flat index space stored in session state.
+        sel = int(st.session_state.get("_sme_sel", 0))
+        if sel >= len(items):
+            sel = 0
+            st.session_state["_sme_sel"] = 0
+
+        offset = 0
+        for band_name in ("judgment", "unresolved", "review_light", "drop_audit"):
+            meta = _BAND_META[band_name]
+            band_items = bands.get(band_name) or []
+            with st.expander(f"{meta['label']} — {len(band_items)}",
+                             expanded=meta["default_open"] and bool(band_items)):
+                if not band_items:
+                    st.caption("(none in this band)")
+                else:
+                    st.caption(meta["blurb"])
+                    if band_name == "review_light":
+                        if st.button(f"✓ Approve all {len(band_items)} review-light item(s)",
+                                     key=f"approve_all_{band_name}", use_container_width=True,
+                                     help="One-click approve every VMAW grounded+uncontested proposal in this band."):
+                            _approve_all(doc_id, band_items)
+                            st.rerun()
+                    labels = [_queue_label(it) for it in band_items]
+                    indices = list(range(offset, offset + len(band_items)))
+                    in_band = (offset <= sel < offset + len(band_items))
+                    picked = st.radio(f"queue_{band_name}", options=indices,
+                                      format_func=lambda i, _labels=labels, _off=offset: _labels[i - _off],
+                                      index=(sel - offset) if in_band else 0,
+                                      label_visibility="collapsed", key=f"radio_{band_name}")
+                    if in_band and picked != sel:
+                        sel = picked
+                        st.session_state["_sme_sel"] = sel
+            offset += len(band_items)
 
     item = items[sel]
 
@@ -145,6 +209,32 @@ def render(*, run) -> None:
 def _queue_label(it: dict[str, Any]) -> str:
     tag = "● proposal" if it.get("vmaw_proposal") else ("○ unresolved" if it.get("vmaw_note") else "· flagged")
     return f"{tag} — {(it.get('section') or it.get('kind') or 'item')}"
+
+
+def _approve_all(doc_id: str, band_items: list[dict[str, Any]]) -> None:
+    """Batch-approve every item in the review_light band — VMAW's grounded +
+    uncontested proposal is applied to the reviewed extraction, and one
+    decision record per item is appended to the SME decision log. Idempotent
+    on re-run (same approval recorded again is harmless)."""
+    extraction = (load_artifact(doc_id, "extraction_reviewed")
+                  or load_extraction(doc_id) or load_artifact(doc_id, "extraction_v2") or {})
+    approved = 0
+    for it in band_items:
+        prop = it.get("vmaw_proposal") or {}
+        if prop.get("value") is None:
+            continue
+        reviewed, decision = apply_sme_decision(
+            extraction, ref=it.get("ref"), action="approve",
+            proposal_value=prop.get("value"))
+        extraction = reviewed     # chain — each approval works against the prior
+        append_sme_decision(doc_id, decision)
+        approved += 1
+    if approved:
+        write_reviewed_extraction(doc_id, extraction)
+        st.success(f"Batch-approved {approved} review-light item(s). "
+                   "Reviewed extraction + decision log updated.")
+    else:
+        st.info("No review-light items had a proposal value to approve.")
 
 
 def _commit_decision(doc_id, item, *, approve, edit, keep, edited, proposal_value) -> None:
