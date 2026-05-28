@@ -217,13 +217,26 @@ def _make_selfcorrecting_persist_node(*, persistence: Any):
             link_metrics = build_link_metrics(state)
         except Exception:
             logger.exception("persist_v3: build_link_metrics failed for %s", state.get("doc_id"))
+        # New artifact: the SAME escalation_queue split into 4 SME bands
+        # (judgment / unresolved / review_light / drop_audit) so the UI can
+        # default to showing only the blocking bands. Pure derived view — the
+        # legacy `escalation_queue` artifact stays untouched so existing
+        # readers don't break.
+        try:
+            from pipeline.vmaw import band_escalation_queue
+            banded = band_escalation_queue(state.get("escalation_queue") or [])
+        except Exception:
+            logger.exception("persist_v3: band_escalation_queue failed for %s", state.get("doc_id"))
+            banded = None
+
         for kind, payload in (("repair_log", state.get("repair_log")),
                               ("block_reads", state.get("block_reads")),
                               ("vmaw_log", state.get("vmaw_log")),
                               ("agent_trace", state.get("agent_trace")),
                               ("binding_items", state.get("binding_items")),
                               ("link_metrics", link_metrics),
-                              ("escalation_queue", state.get("escalation_queue"))):
+                              ("escalation_queue", state.get("escalation_queue")),
+                              ("escalation_queue_banded", banded)):
             if payload:
                 try:
                     await persistence.write_artifact(

@@ -166,25 +166,38 @@ slot and the original is kept in `occurrences` with `superseded: true`.
 ### 7b. Per-field rationale (`provenance`) — ALWAYS emit, as an ARRAY
 
 In ADDITION to `occurrences`, emit a `provenance` **array** on each biomarker record
-AND on each finding — ONE entry per field you populated in THAT record. Each entry is
-`{field_name, block_id, page, type, rationale}` where `field_name` is the populated
-field, `type` is one of `verbatim` | `inferred` | `derived` | `absent`, and `rationale`
-is ONE short clause saying WHY you chose that value (required when `type` is
-`inferred`/`derived`). This is the per-field "why" the SME reviewer reads — emit it for
-EVERY field, keep it brief, ground it in a cited block, and never restate PHI beyond
-what `occurrences` already hold. Use an ARRAY (not a keyed object).
+AND on each finding. There MUST be **one entry per populated field** of THAT record
+(every field whose value is not null). Each entry is `{field_name, block_id, page,
+type, rationale}` where:
+  - `type` ∈ `verbatim | inferred | derived | absent`.
+  - `block_id` cites the source block (use only block_ids returned by your tools).
+  - `rationale` is **REQUIRED for EVERY entry, including `verbatim`** — it is the
+    per-field "why" the SME reviewer reads. A short natural-language clause naming
+    the source location AND what made you confident in the value.
+
+**Never** put the literal word `"verbatim"`, `"inferred"`, `"derived"`, or the
+`type` tag itself in the `rationale` slot — that field is for prose, not the type
+label. **Never** leave `rationale` as `null` for a populated field.
+
+Use an ARRAY (not a keyed object). Keep it brief, ground it in the cited block,
+and never restate PHI beyond what `occurrences` already hold.
 
 ```json
 "findings": [{
   "method": "PCR", "result": "Not Detected",
   "provenance": [
     { "field_name": "result", "block_id": "b23", "page": 1, "type": "verbatim",
-      "rationale": "result cell reads 'Not Detected'" },
+      "rationale": "result cell at block b23 reads 'Not Detected'" },
     { "field_name": "method", "block_id": "b17", "page": 1, "type": "inferred",
-      "rationale": "method inherited from the section header 'Quantitative PCR'" }
+      "rationale": "method inherited from the section header 'Quantitative PCR' at block b17" }
   ]
 }]
 ```
+
+Bad rationales (do NOT emit):
+  `"verbatim"`     ← that's the TYPE tag, not a rationale
+  `null`           ← rationale is required, even for verbatim fields
+  `"from the report"` ← too vague; name the source block / column / row
 
 ## 8. `page_number` (per biomarker and per finding) + `llm_confidence_score`
 

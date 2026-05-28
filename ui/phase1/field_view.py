@@ -104,14 +104,35 @@ def _row(step: dict[str, Any], technical: bool) -> str:
     if not line:
         line = step.get("output_summary") or ""
     reasoning = (step.get("reasoning") or "").strip()
+    section_reasoning = (step.get("section_reasoning") or "").strip()
     scope = step.get("reasoning_scope")
     verdict = step.get("verdict") or ""
-    # Sub-line: prefer the field-level reasoning when present; fall back to section.
+
+    def _sub(label: str, text: str) -> str:
+        return (
+            f'<div style="color:var(--color-text-secondary);font-size:12px;'
+            f'margin-top:3px;line-height:1.4;">'
+            f'<span style="color:var(--color-text-tertiary,#7a7a76);font-weight:500;'
+            f'margin-right:6px;">↳ {_esc(label)}</span>'
+            f'<span style="white-space:pre-wrap;">{_esc(text)}</span>'
+            f'</div>'
+        )
+
+    # Compose up to two reasoning lines:
+    #   • primary `reasoning`: the field-specific 'why' when scope=field, OR the
+    #     section-level note when scope=section. Labelled accordingly.
+    #   • `section_reasoning`: the model's own section-level prose (its <reasoning>
+    #     block / full final message), only present on the high-level Extractor row
+    #     when distinct from the per-field rationale. Always labelled "section
+    #     reasoning" so the SME knows it's NOT about this specific field.
     sub = ""
     if reasoning:
-        prefix = "" if scope in ("field", None) else "(section) "
-        sub = (f'<div style="color:var(--color-text-secondary);font-size:12px;margin-top:2px;">'
-               f'{_esc(prefix)}{_esc(reasoning)}</div>')
+        label = "why (this field)" if scope in ("field", None) else \
+                "note (section-level — not specific to this field)"
+        sub += _sub(label, reasoning)
+    if section_reasoning:
+        sub += _sub("section reasoning (what the model thought about the whole section)",
+                    section_reasoning)
     return (
         '<div style="display:grid;grid-template-columns:110px 1fr 110px;padding:10px 14px;'
         'align-items:flex-start;gap:10px;font-size:13px;'

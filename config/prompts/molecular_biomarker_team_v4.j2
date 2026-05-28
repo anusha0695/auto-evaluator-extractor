@@ -65,9 +65,27 @@ records (one per method) — there is no per-method grouping array in v4.
 
 - When a single field's value is spread across non-adjacent fragments, concatenate them
   with **` | `** (space-pipe-space).
-- Emit a `provenance` ARRAY on each record — one `{field_name, block_id, page, type,
-  rationale}` entry per populated field. `type` ∈ `verbatim | inferred | derived | absent`.
-  Cite only block_ids from tool results.
+- Emit a `provenance` ARRAY on each record. There MUST be **one entry per populated
+  field** of the biomarker record (every field whose value is not null). Each entry is
+  `{field_name, block_id, page, type, rationale}`:
+  - `type` ∈ `verbatim | inferred | derived | absent`.
+  - `block_id` cites the source block (use only block_ids returned by your tools).
+  - `rationale` is **REQUIRED for every entry, including `verbatim`**. It is a short
+    natural-language clause naming the source location and what made you confident in
+    the value. **Never** put the literal word `"verbatim"`, `"inferred"`, `"derived"`,
+    or the type tag itself in the `rationale` slot — that field is for prose, not the
+    type label. **Never** leave `rationale` as `null` for a populated field.
+
+  Good rationales (verbatim case):
+    `"matches the 'Biomarker' column of block_22 in the molecular results table"`
+    `"the result cell at block_23 prints 'Not Detected'"`
+    `"method label 'Quantitative PCR' in the section header of block_65"`
+
+  Bad rationales (do NOT emit):
+    `"verbatim"`     ← that's the TYPE tag, not a rationale
+    `null`           ← rationale is required, even for verbatim fields
+    `"from the report"` ← too vague; name the source block / column / row
+
 - Dictionary first: if `biomarker_normalize` resolves the name, use it silently; if it's a
   low-margin/context correction or the surface is OCR-garbled, set `needs_review: true` with
   a `review_reason`. Never silently rewrite a token the dictionary couldn't justify.

@@ -112,13 +112,19 @@ def why(item: dict[str, Any], *, mode: str = "plain") -> str:
 
 def _step(phase: str, node: str, technical: str, plain: str, verdict: str = "",
           reasoning: str = "", kind: str = "", seq: int = 0,
-          reasoning_scope: str = "field") -> dict[str, Any]:
+          reasoning_scope: str = "field",
+          section_reasoning: str = "") -> dict[str, Any]:
     # reasoning_scope: "field" = the note is specifically about the selected field;
     # "section" = it's a section-level note (the agent didn't single this field out),
     # so the UI must NOT present it as if it explains THIS field.
+    # section_reasoning: optional second reasoning line — the agent's own section-
+    # level prose (e.g. the Extractor's <reasoning> block) — carried IN ADDITION to
+    # `reasoning` when both are useful. Rendered with the "section reasoning" label
+    # so the SME sees the per-field 'why' AND the section's overall reasoning at once.
     return {"phase": phase, "node": node, "technical": technical, "plain": plain,
             "verdict": verdict, "reasoning": (reasoning or "").strip(), "kind": kind,
             "reasoning_scope": reasoning_scope if (reasoning or "").strip() else "",
+            "section_reasoning": (section_reasoning or "").strip(),
             "_seq": seq}
 
 
@@ -239,20 +245,32 @@ def assemble_field_trace(
         # whole section ("section") — so a note about a *different* field (e.g. the
         # arbiter discussing VAF while you've selected biomarker_name) is labelled,
         # not silently shown as this field's "why".
+        # Default: no second reasoning line. Only the high-level Extractor row
+        # carries TWO lines when both signals exist.
+        section_why_text = ""
         if agent.startswith("Extractor"):
             # Extractor sub-steps (thought / tool / tool-result) are scoped to the
             # specific field/section being extracted; their content (the thought text,
             # the tool args, the tool's JSON return) IS the per-field "why" for this
-            # extraction. Mark them field-scope. The high-level Extractor record still
-            # prefers a stored field_rationale when one exists; else its full reasoning
-            # (the model's last thought) is treated as section-level.
+            # extraction. Mark them field-scope. The high-level Extractor record
+            # surfaces BOTH lines when available: (a) the field-specific rationale
+            # from the record's `provenance` array (per-field 'why'), AND (b) the
+            # model's section-level reasoning (its <reasoning> block / full final
+            # message). The renderer labels each one distinctly so the SME sees
+            # "why this value" + "what the model thought about the section" together.
             is_substep = ("·" in agent and agent != "Extractor (re-extract)")
-            if field_rationale and not is_substep:
+            agent_reasoning = a.get("reasoning", "") or ""
+            if is_substep:
+                why_text, scope = agent_reasoning, "field"
+            elif field_rationale:
                 why_text, scope = field_rationale, "field"
-            elif is_substep:
-                why_text, scope = a.get("reasoning", ""), "field"
+                # Carry the model's own prose as the second line, but only when
+                # it's distinct from the per-field rationale (avoid showing the
+                # same string twice).
+                if agent_reasoning.strip() and agent_reasoning.strip() != field_rationale.strip():
+                    section_why_text = agent_reasoning
             else:
-                why_text, scope = a.get("reasoning", ""), "section"
+                why_text, scope = agent_reasoning, "section"
         else:
             matched = _match_field_reason(a.get("field_reasons") or {}, leaf)
             if matched:
@@ -275,6 +293,7 @@ def assemble_field_trace(
                       + (f" · conf={conf:.2f}" if isinstance(conf, (int, float)) else ""),
             plain=plain_text,
             verdict=a.get("verdict", ""), reasoning=why_text, reasoning_scope=scope,
+            section_reasoning=section_why_text,
             seq=step_n))
 
     # 1b. linking — back-compat for runs whose agent_trace has NO linking phase records

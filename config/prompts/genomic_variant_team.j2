@@ -94,10 +94,26 @@ field, not a reason to retry.
 
 - When a single field's value is spread across non-adjacent fragments, concatenate them
   with **` | `** (space-pipe-space).
-- Emit a `provenance` ARRAY on each variant — one `{field_name, block_id, page, type,
-  rationale}` entry per populated field. `type` ∈ `verbatim | inferred | derived | absent`;
-  `rationale` is one short clause (required for `inferred`/`derived`). Cite only block_ids
-  from tool results.
+- Emit a `provenance` ARRAY on each variant. There MUST be **one entry per populated
+  field** of the variant record (every field whose value is not null). Each entry is
+  `{field_name, block_id, page, type, rationale}`:
+  - `type` ∈ `verbatim | inferred | derived | absent`.
+  - `block_id` cites the source block (use only block_ids returned by your tools).
+  - `rationale` is **REQUIRED for every entry, including `verbatim`**. It is a short
+    natural-language clause naming the source location and what made you confident in
+    the value. **Never** put the literal word `"verbatim"`, `"inferred"`, `"derived"`,
+    or the type tag itself in the `rationale` slot — that field is for prose, not the
+    type label. **Never** leave `rationale` as `null` for a populated field.
+
+  Good rationales (verbatim case):
+    `"matches the 'Gene' column of the variant table at block_10, page 1"`
+    `"the literal string 'V617F' in the protein-change column of block_10"`
+    `"taken from the 'Method' field of the variant summary on page 2"`
+
+  Bad rationales (do NOT emit):
+    `"verbatim"`     ← that's the TYPE tag, not a rationale
+    `null`           ← rationale is required, even for verbatim fields
+    `"copied from the report"` ← too vague; name the source location
 
 ## 5. OCR / inference flag
 

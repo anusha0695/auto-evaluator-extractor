@@ -56,6 +56,16 @@ ROUTING: dict[str, list[str]] = {
     "attribution_contested": ["cite", "va"],   # M10c — CITE grounds attr→owner; VA (contested) → SME
     "invoke_vmaw": ["ec", "va"],               # T1 canonical
     "schema_error": ["va"],                    # structural — usually SME
+    # Normalization-class defects: the team emitted a value the validator can't
+    # canonicalize (HGVS pattern, gene alias resolution, etc). These are CITE-first
+    # candidates — VMAW hunts for the canonical form in the source. Without this
+    # routing they fall through to _DEFAULT_CAPS=[va] which forces SME even when
+    # VMAW lands a grounded+uncontested proposal (a clear LLM-fixable case).
+    "invalid_hgvs": ["cite", "ec"],            # malformed HGVS — find the canonical form
+    "normalization_invalid": ["cite", "ec"],   # canonical form differs from extracted
+    "missing_provenance": ["cite"],            # team emitted value without citation — find it
+    "block_misroute": ["ec"],                  # expand context, see if right section is identifiable
+    "link_cannot_form": ["va"],                # link endpoint missing — keep VA (judgment)
 }
 _DEFAULT_CAPS = ["va"]
 
@@ -65,6 +75,71 @@ _DEFAULT_CAPS = ["va"]
 # payload in the SME queue for audit/restore. Only these "no-support" kinds drop;
 # everything else (needs_review, binding_uncertain, …) stays flagged in the queue.
 _DROPPABLE_ON_UNRESOLVED = {"binding_refuted", "link_cannot_form"}
+
+
+# -- SME queue banding ------------------------------------------------------
+#
+# Items that survive into `escalation_queue.json` after VMAW STILL need to be
+# classified by SME priority. Four bands:
+#
+#   judgment      — the only band that BLOCKS the workflow. Real decision —
+#                    SME must pick between alternatives, ground the value
+#                    themselves, or accept VMAW's contested proposal.
+#                    Signal: contested=true  OR  (grounded=false  AND  vmaw has a guess)
+#
+#   unresolved    — VMAW exhausted every capability (EC, CITE, VA) and still
+#                    has no proposal. SME has to investigate from scratch.
+#                    Signal: vmaw_note.status == "unresolved"
+#
+#   review_light  — VMAW landed a clean grounded+uncontested proposal but the
+#                    capability policy held it back from auto-applying (e.g. VA
+#                    for binding_refuted). Safe to one-click approve in batch.
+#                    Signal: grounded=true AND contested=false AND has vmaw_proposal
+#
+#   drop_audit    — the record was dropped from the envelope because VMAW
+#                    couldn't ground it after re-extract. SME audits the
+#                    deletion (confirm absent, or restore).
+#                    Signal: kind == "dropped_ungroundable"
+#
+# Pure function, no state — UI can call it directly on a queue item.
+def classify_band(item: dict[str, Any]) -> str:
+    """Return one of: 'judgment' | 'unresolved' | 'review_light' | 'drop_audit'."""
+    kind = item.get("kind")
+    if kind == "dropped_ungroundable":
+        return "drop_audit"
+    note = item.get("vmaw_note") or {}
+    if note.get("status") == "unresolved":
+        return "unresolved"
+    prop = item.get("vmaw_proposal") or {}
+    if prop and prop.get("grounded") and not prop.get("contested"):
+        return "review_light"
+    return "judgment"
+
+
+def band_escalation_queue(queue: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the per-band view used by the SME UI + the persisted
+    `escalation_queue_banded.json` artifact. Each item is enriched with
+    `triage_band` and grouped under its band; bands are listed in priority
+    order so the UI can render them top-to-bottom."""
+    banded: dict[str, list[dict[str, Any]]] = {
+        "judgment": [], "unresolved": [], "review_light": [], "drop_audit": []}
+    for it in (queue or []):
+        band = classify_band(it)
+        enriched = dict(it)
+        enriched["triage_band"] = band
+        banded[band].append(enriched)
+    return {
+        "summary": {
+            "total":        sum(len(v) for v in banded.values()),
+            "judgment":     len(banded["judgment"]),
+            "unresolved":   len(banded["unresolved"]),
+            "review_light": len(banded["review_light"]),
+            "drop_audit":   len(banded["drop_audit"]),
+            "blocks_workflow": len(banded["judgment"]) + len(banded["unresolved"]),
+        },
+        "bands": banded,
+        "band_order": ["judgment", "unresolved", "review_light", "drop_audit"],
+    }
 
 
 @dataclass
