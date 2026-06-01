@@ -1,22 +1,60 @@
 # =============================================================================
-# Production-schema field map (P3-M9)  —  production field  ←  OUR output field
+# Production-schema mapping  —  ACTIVE MODE: identity_v4
 # =============================================================================
-# Target = production_schema_v3.json (`pathology_extraction` root).
-# Source = our v3 envelope (extraction_v2.json / extraction_reviewed.json).
+# The customer's production TARGET is the mCODE `genomic_pathology_extraction`
+# schema — which IS our v4 extraction schema (config/schemas/genomic_pathology_v4.json,
+# transcribed from the prod_schema_2 photos). So production output is the v4
+# envelope itself, with internal-only keys stripped, wrapped under the mCODE key.
 #
-# HOW THIS FILE IS USED:
-#   • `administrative_info:` is MACHINE-READ by transform/to_production.py (the
-#     flat→nested renames are driven from here — edit to retune).
-#   • the other four sections document the mapping that to_production.py implements:
-#       - significant_findings + clinical_information are 1:1 IDENTITY (our 2a/2b
-#         schema uses the SAME field names as production), copied field-for-field
-#         with our internal-only keys stripped (provenance / needs_review / occurrences).
-#       - the two biomarker sections are TRANSFORMS (filter / flatten / fold / derive),
-#         annotated with `_transform:` notes.
+# transform/to_production.py reads `mode:` and dispatches:
+#   • mode: identity_v4         → _identity_v4()  (current — emits `sections` with
+#                                  `strip_keys` removed, under genomic_pathology_extraction)
+#   • mode: pathology_extraction → _legacy_pathology_extraction()  (the old custom
+#                                  rename/fold shape, driven by the `administrative_info:`
+#                                  + section blocks BELOW — kept for one-line revert)
+#
+# TO REVERT to the legacy production_schema_v3 shape: set `mode: pathology_extraction`.
+# =============================================================================
+
+mode: identity_v4
+
+# The production-contract schema file. Production output is conformed to THIS
+# schema (every defined field present, absent → null; internal keys stripped;
+# non-schema keys dropped). To retarget production to a different/new schema,
+# point this at another file — no Python change needed. Omit it to fall back to
+# the built-in default (config/schemas/genomic_pathology_v4.json).
+schema: config/schemas/genomic_pathology_v4.json
+
+# Sections emitted to production, in order. These are the active v4 umbrellas;
+# the disabled sections (significant_findings, clinical_information) are omitted
+# (they're not in a v4 envelope). Re-add them here if those teams are re-enabled.
+sections:
+  - count_of_extracted_objects
+  - report_metadata
+  - Genomic_Variant_umbrella
+  - other_molecular_biomarker_umbrella
+  - tested_biomarker_umbrella
+
+# Internal-only keys stripped at EVERY nesting level — our additions that are not
+# part of the mCODE contract and must never ship to production.
+strip_keys:
+  - provenance
+  - needs_review
+  - review_reason
+  - hgvs_normalized
+  - occurrences
+  - vmaw_confirmed
+  - vmaw_attribution_confirmed
+
+# =============================================================================
+# LEGACY pathology_extraction map (only read when `mode: pathology_extraction`).
+# Kept verbatim so flipping `mode` above restores the previous production shape.
+#   Target = production_schema_v3.json (`pathology_extraction` root).
+#   Source = our envelope (extraction_v2.json / extraction_reviewed.json).
 # Notation:  prod_field: our.source.path     ·     `[]` = per-array-item
 # =============================================================================
 
-administrative_info:                         # ← report_metadata.*   (MACHINE-READ)
+administrative_info:                         # ← report_metadata.*   (MACHINE-READ in legacy mode)
   total_pages: total_pages
   report_title: report_title
   report_type: Report_Type

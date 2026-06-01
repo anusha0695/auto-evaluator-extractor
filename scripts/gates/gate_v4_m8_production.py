@@ -28,6 +28,21 @@ _GT_V3 = "ground_truth/demo.json"
 _GT_V4 = "ground_truth/demo_v4.json"
 
 
+def _legacy_mapping() -> str:
+    """Write a temp mapping with mode=pathology_extraction so this gate exercises the
+    LEGACY transform (the default production mode is now identity_v4; the legacy
+    pathology_extraction shape is kept reachable and this gate protects it)."""
+    import tempfile, yaml
+    m = yaml.safe_load(open("config/production_mapping.yaml", encoding="utf-8")) or {}
+    m["mode"] = "pathology_extraction"
+    fd = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+    yaml.safe_dump(m, fd); fd.close()
+    return fd.name
+
+
+_LEGACY = _legacy_mapping()
+
+
 def _env(path: str) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))["genomic_pathology_extraction"]
 
@@ -41,7 +56,7 @@ def main() -> int:
             fails.append(label)
 
     print("[1] v3 output unchanged (variant folded from nested findings[])")
-    p3 = to_production(_env(_GT_V3))["pathology_extraction"]
+    p3 = to_production(_env(_GT_V3), mapping_path=_LEGACY)["pathology_extraction"]
     bm3 = p3["pathology_biomarkers_findings"]["pathology_biomarkers"]
     jak3 = next((b for b in bm3 if b["biomarker_name"] == "JAK2"), None)
     check("v3 JAK2 biomarker present", jak3 is not None)
@@ -50,7 +65,7 @@ def main() -> int:
           (jak3["findings"][0]["details"] if jak3 else ""))
 
     print("[2] v4 variant sourced from the separate Genomic_Variant_umbrella")
-    p4 = to_production(_env(_GT_V4))["pathology_extraction"]
+    p4 = to_production(_env(_GT_V4), mapping_path=_LEGACY)["pathology_extraction"]
     bm4 = p4["pathology_biomarkers_findings"]["pathology_biomarkers"]
     jak4 = next((b for b in bm4 if b["biomarker_name"] == "JAK2"), None)
     check("v4 JAK2 biomarker present (from Genomic_Variant_umbrella)", jak4 is not None)
@@ -75,7 +90,7 @@ def main() -> int:
         ]},
         "tested_biomarker_umbrella": {},
     }
-    pf = to_production(flat_env)["pathology_extraction"]["pathology_biomarkers_findings"]
+    pf = to_production(flat_env, mapping_path=_LEGACY)["pathology_extraction"]["pathology_biomarkers_findings"]
     names = [b["biomarker_name"] for b in pf["pathology_biomarkers"]]
     check("flat ER (with result) emitted", "ER" in names, str(names))
     check("flat Ki-67 (no result) dropped — Decision C", "Ki-67" not in names)

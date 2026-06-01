@@ -40,11 +40,21 @@ def main(argv: list[str] | None = None) -> int:
     out = to_production(envelope)
     dest = d / "extraction_production.json"
     dest.write_text(json.dumps(out, indent=2, default=str), encoding="utf-8")
-    pe = out["pathology_extraction"]
-    nbm = pe["pathology_biomarkers_findings"]["number_of_biomarkers_with_definitive_results"]
-    nsp = len(pe["significant_findings"]["specimen_findings"])
     print(f"wrote {dest}")
-    print(f"  source: {src.name} · biomarkers_with_result={nbm} · specimen_findings={nsp}")
+    if "genomic_pathology_extraction" in out:
+        # identity_v4 (default): mCODE root, schema-completed sections
+        inner = out["genomic_pathology_extraction"]
+        print(f"  source: {src.name} · mode=identity_v4 · sections={len(inner)} "
+              f"· keys={sorted(inner)}")
+    elif "pathology_extraction" in out:
+        # legacy pathology_extraction 5-section shape
+        pe = out["pathology_extraction"]
+        nbm = pe["pathology_biomarkers_findings"]["number_of_biomarkers_with_definitive_results"]
+        nsp = len(pe["significant_findings"]["specimen_findings"])
+        print(f"  source: {src.name} · mode=pathology_extraction "
+              f"· biomarkers_with_result={nbm} · specimen_findings={nsp}")
+    else:
+        print(f"  source: {src.name} · root keys={sorted(out)}")
     return 0
 
 

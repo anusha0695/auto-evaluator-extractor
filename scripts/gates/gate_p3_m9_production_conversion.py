@@ -75,7 +75,16 @@ def main() -> int:
         if not cond:
             fails.append(label)
 
-    out = to_production(_envelope())
+    # The default production mode is now identity_v4; this gate protects the LEGACY
+    # pathology_extraction transform, so request it explicitly via a temp mapping.
+    import tempfile
+    _m = yaml.safe_load(open("config/production_mapping.yaml", encoding="utf-8")) or {}
+    _m["mode"] = "pathology_extraction"
+    _legacy_fd = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+    yaml.safe_dump(_m, _legacy_fd); _legacy_fd.close()
+    _LEGACY = _legacy_fd.name
+
+    out = to_production(_envelope(), mapping_path=_LEGACY)
     pe = out.get("pathology_extraction") or {}
 
     print("[5] all five production sections present")
@@ -173,10 +182,17 @@ def main() -> int:
     asyncio.run(_make_selfcorrecting_persist_node(persistence=fp)(_persist_state("auto_accept")))
     check("extraction_production artifact emitted by persist node", "extraction_production" in fp.artifacts)
     if "extraction_production" in fp.artifacts:
-        _pe = (yaml.safe_load(fp.artifacts["extraction_production"]) or {}).get("pathology_extraction") or {}
-        check("emitted production has all five sections",
-              {"administrative_info", "significant_findings", "clinical_information",
-               "pathology_biomarkers_findings", "pathology_biomarkers_mentioned"} <= set(_pe))
+        # The persist node uses the DEFAULT mapping, which is now mode: identity_v4 —
+        # so the emitted production is the v4 envelope (internal keys stripped) under
+        # the mCODE root key, NOT the legacy pathology_extraction 5-section shape.
+        _emit = yaml.safe_load(fp.artifacts["extraction_production"]) or {}
+        check("emitted production uses the mCODE root key (identity_v4)",
+              "genomic_pathology_extraction" in _emit, str(list(_emit.keys())))
+        _inner = _emit.get("genomic_pathology_extraction") or {}
+        # identity_v4 emits only the sections present in the envelope (the fixture
+        # has report_metadata + biomarker + tested, no Genomic_Variant_umbrella).
+        check("emitted production carries the present v4 sections",
+              {"report_metadata", "tested_biomarker_umbrella"} <= set(_inner), str(list(_inner.keys())))
     fp2 = _FakePersistence()
     asyncio.run(_make_selfcorrecting_persist_node(persistence=fp2)(_persist_state("sme_flag")))
     check("no production emit when verdict is not committed", "extraction_production" not in fp2.artifacts)

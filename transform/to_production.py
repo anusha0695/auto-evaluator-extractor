@@ -24,6 +24,21 @@ DEFAULT_MAPPING = "config/production_mapping.yaml"
 _STRIP = {"provenance", "needs_review", "review_reason", "occurrences",
           "vmaw_confirmed", "vmaw_attribution_confirmed"}
 
+# Identity-v4 mode: the customer's production target IS the mCODE
+# genomic_pathology_extraction schema (== our v4 extraction schema), so production
+# output is the v4 envelope with internal-only keys stripped, wrapped under the
+# mCODE output key. The strip set + section list come from production_mapping.yaml
+# (mode: identity_v4) so the contract is config-driven; this is the fallback.
+_IDENTITY_STRIP_DEFAULT = {
+    "provenance", "needs_review", "review_reason", "hgvs_normalized",
+    "occurrences", "vmaw_confirmed", "vmaw_attribution_confirmed",
+}
+_IDENTITY_SECTIONS_DEFAULT = [
+    "count_of_extracted_objects", "report_metadata", "Genomic_Variant_umbrella",
+    "other_molecular_biomarker_umbrella", "tested_biomarker_umbrella",
+]
+_MCODE_ROOT_KEY = "genomic_pathology_extraction"
+
 # variant_detail → details fold, in clinical priority order (verbatim key, label)
 _VARIANT_ORDER = [
     ("amino_acid_change", ""), ("coding_dna_change", "c. "), ("genomic_dna_change", "g. "),
@@ -33,8 +48,91 @@ _VARIANT_ORDER = [
 
 
 def to_production(envelope: dict[str, Any], *, mapping_path: str = DEFAULT_MAPPING) -> dict[str, Any]:
-    """Return the production `{"pathology_extraction": {...}}` object."""
+    """Convert our extraction envelope → the production object.
+
+    Dispatches on the mapping's `mode`:
+      • identity_v4         → the v4 envelope with internal keys stripped, wrapped
+                              under `genomic_pathology_extraction` (the mCODE contract).
+                              This is the current production target.
+      • pathology_extraction (default when mode absent) → the legacy custom
+                              `pathology_extraction` shape (rename / fold / flatten).
+                              Kept reachable so flipping the mapping's `mode` reverts.
+    """
     mapping = yaml.safe_load(open(mapping_path, encoding="utf-8")) or {}
+    mode = mapping.get("mode", "pathology_extraction")
+    if mode == "identity_v4":
+        return _identity_v4(envelope, mapping)
+    return _legacy_pathology_extraction(envelope, mapping)
+
+
+# Default schema path. Overridable WITHOUT touching Python: set `schema:` in
+# config/production_mapping.yaml to point at any schema file (e.g. a future v5).
+# This constant is only the fallback when the mapping omits `schema:`.
+_V4_SCHEMA_PATH = "config/schemas/genomic_pathology_v4.json"
+
+
+def _load_v4_properties(schema_path: str = _V4_SCHEMA_PATH) -> dict[str, Any]:
+    """Top-level `properties` of the production-contract schema. `schema_path`
+    comes from the mapping's `schema:` key, so a schema swap is config-only."""
+    import json
+    with open(schema_path, encoding="utf-8") as fh:
+        return (json.load(fh) or {}).get("properties") or {}
+
+
+def _identity_v4(envelope: dict[str, Any], mapping: dict[str, Any]) -> dict[str, Any]:
+    """Production = the envelope conformed to the production-contract schema:
+      • every field DEFINED in the schema is present (missing → null), honoring the
+        mCODE rule "every field must appear; absent → null" (covers `required`).
+      • internal-only keys (provenance, needs_review, hgvs_normalized, …) are stripped.
+      • keys NOT in the schema are dropped (the output is exactly the schema shape).
+    Pure / offline. The schema file, sections, and strip keys all come from
+    config/production_mapping.yaml — no Python edit needed to retarget."""
+    strip = set(mapping.get("strip_keys") or _IDENTITY_STRIP_DEFAULT)
+    sections = mapping.get("sections") or _IDENTITY_SECTIONS_DEFAULT
+    props = _load_v4_properties(mapping.get("schema") or _V4_SCHEMA_PATH)
+    out: dict[str, Any] = {}
+    for sec in sections:
+        if sec not in props:
+            # not a schema object (e.g. count_of_extracted_objects scalar) — copy as-is.
+            if sec in envelope:
+                out[sec] = envelope.get(sec)
+            continue
+        out[sec] = _conform(envelope.get(sec), props[sec], strip)
+    return {_MCODE_ROOT_KEY: out}
+
+
+def _conform(value: Any, schema_node: dict[str, Any], strip: set[str]) -> Any:
+    """Shape `value` to `schema_node`, filling every defined field (missing → null),
+    stripping internal-only keys, and dropping keys not in the schema."""
+    node_type = schema_node.get("type")
+    is_object = node_type == "object" or "properties" in schema_node
+    is_array = node_type == "array" or "items" in schema_node
+
+    if is_object and isinstance(schema_node.get("properties"), dict):
+        src = value if isinstance(value, dict) else {}
+        result: dict[str, Any] = {}
+        for field, fnode in schema_node["properties"].items():
+            if field in strip:                         # internal-only → never shipped
+                continue
+            result[field] = _conform(src.get(field), fnode, strip) if isinstance(fnode, dict) \
+                else src.get(field)
+        return result
+
+    if is_array and isinstance(schema_node.get("items"), dict):
+        items_schema = schema_node["items"]
+        src_list = value if isinstance(value, list) else []
+        # If items are objects, conform each; if scalars (e.g. tested_biomarkers: str), copy.
+        if items_schema.get("type") == "object" or "properties" in items_schema:
+            return [_conform(it, items_schema, strip) for it in src_list]
+        return list(src_list)
+
+    # scalar leaf: keep the value, or null when absent (mCODE: absent → null)
+    return value if value is not None else None
+
+
+def _legacy_pathology_extraction(envelope: dict[str, Any], mapping: dict[str, Any]) -> dict[str, Any]:
+    """The original custom production shape (P3-M9). Reachable via mode:
+    pathology_extraction — kept for revertability and the legacy gates."""
     rm = envelope.get("report_metadata") or {}
     return {"pathology_extraction": {
         "administrative_info": _resolve(mapping.get("administrative_info") or {}, rm),
@@ -207,9 +305,25 @@ def admin_inverse(mapping: dict[str, Any]) -> dict[str, str]:
     return inv
 
 
+def production_label_identity(ref: str, strip: set[str] | None = None) -> str | None:
+    """Identity-v4 mode: production == the v4 envelope, so every field maps to
+    ITSELF. Returns the ref rendered as a `section › path` label, or None for an
+    internal-only key that's stripped from production (provenance, needs_review,
+    hgvs_normalized, …) so the UI hides it."""
+    strip = strip if strip is not None else _IDENTITY_STRIP_DEFAULT
+    parts = str(ref).split(".")
+    leaf = parts[-1].split("[")[0]
+    if leaf in strip:
+        return None
+    # the field survives unchanged — its production location IS its envelope path
+    return " › ".join(parts)
+
+
 def production_label(ref: str, admin_inv: dict[str, str]) -> str | None:
     """Map an OUR-envelope field ref → its production location label, or None if the
-    field does NOT survive into the production schema (so the UI can hide it)."""
+    field does NOT survive into the production schema (so the UI can hide it).
+    This is the LEGACY pathology_extraction labeler; identity-v4 uses
+    production_label_identity()."""
     parts = str(ref).split(".")
     sec = parts[0]
     leaf = parts[-1].split("[")[0]
