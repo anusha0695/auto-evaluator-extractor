@@ -87,9 +87,16 @@ def _identity_v4(envelope: dict[str, Any], mapping: dict[str, Any]) -> dict[str,
       • keys NOT in the schema are dropped (the output is exactly the schema shape).
     Pure / offline. The schema file, sections, and strip keys all come from
     config/production_mapping.yaml — no Python edit needed to retarget."""
-    strip = set(mapping.get("strip_keys") or _IDENTITY_STRIP_DEFAULT)
-    sections = mapping.get("sections") or _IDENTITY_SECTIONS_DEFAULT
     props = _load_v4_properties(mapping.get("schema") or _V4_SCHEMA_PATH)
+    strip = set(mapping.get("strip_keys") or _IDENTITY_STRIP_DEFAULT)
+    # Sections DERIVE from the schema by default — every top-level property, in schema
+    # order — so the mapping never goes stale: add a field or a whole section to the
+    # schema and production tracks it with no edit here. `exclude_sections` suppresses
+    # sections that exist in the schema but are disabled in this pipeline (their teams
+    # are off in teams_v4.yaml). An explicit `sections:` list still wins if you ever
+    # need to pin the set/order manually.
+    exclude = set(mapping.get("exclude_sections") or [])
+    sections = mapping.get("sections") or [k for k in props if k not in exclude]
     out: dict[str, Any] = {}
     for sec in sections:
         if sec not in props:

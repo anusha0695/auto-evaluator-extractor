@@ -163,6 +163,10 @@ class LinkResult:
     dedup_drops: list[dict[str, Any]] = field(default_factory=list)         # {section, ref, gene, rule}
     supersession_events: list[dict[str, Any]] = field(default_factory=list)  # {ref, addendum_block_id, resolved, detail}
     dropped_contextual_links: list[dict[str, Any]] = field(default_factory=list)  # {from_ref, to_ref, type, reason}
+    # Audit log of contextual links the adjudicator PROPOSED and validate_link
+    # ACCEPTED. Records the (from, to, type) the LLM chose — useful for post-mortems
+    # like "why did a TP53↔MSI link survive?" (Patch 2 instrumentation).
+    accepted_contextual_links: list[dict[str, Any]] = field(default_factory=list)
 
 
 class Linker:
@@ -257,6 +261,12 @@ class Linker:
                         continue
                     existing.add((frm, to, typ))
                     result.links.append(Link(method="contextual", **lk))
+                    result.accepted_contextual_links.append({
+                        "from_ref": str(frm or ""), "to_ref": str(to or ""),
+                        "type": str(typ or ""),
+                        "confidence": lk.get("confidence"),
+                        "evidence_block_ids": list(lk.get("evidence_block_ids") or []),
+                    })
                     kept += 1
                 if proposed:
                     logger.info("Linker: contextual links kept=%d dropped(invalid/dupe)=%d", kept, dropped)

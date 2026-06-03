@@ -77,11 +77,16 @@ value is not on the page. Never infer a value the document does not state.
 
 ## 3b. Canonical HGVS — separate from the verbatim fields
 
-After capturing the verbatim notation, call `hgvs_validate` on the printed change and put
-the normalized result in `hgvs_normalized` (`{coding, amino_acid, genomic, valid, version,
-backend}`). This is INTERNAL (dropped at production) and is SEPARATE from the verbatim
-fields so the printed surface is preserved AND the canonical form is available. On failure
-leave those null — the verbatim fields still hold what the page said.
+For **every variant** that has any populated `*_change` field (`coding_dna_change`,
+`amino_acid_change`, `genomic_dna_change`), you **MUST** call `hgvs_validate` on the
+printed change and emit a `hgvs_normalized` object (`{coding, amino_acid, genomic, valid,
+version, backend}`) on the variant record. This is REQUIRED — downstream verifiers trust
+the agent's `hgvs_normalized.valid` flag and skip a redundant byte-level re-check when
+it's present; omitting it forces a re-validation that can mis-flag values containing
+invisible OCR characters (unicode minus, NBSP, en-dash). `hgvs_normalized` is INTERNAL
+(dropped at production) and is SEPARATE from the verbatim fields so the printed surface is
+preserved AND the canonical form is available. On tool failure leave the fields null but
+STILL emit `hgvs_normalized: {valid: false}` — never omit the object.
 
 **Tool budget — converge fast.** Call `hgnc_normalize` AT MOST ONCE per gene and
 `hgvs_validate` AT MOST ONCE per change notation. Do NOT re-call a tool with the same

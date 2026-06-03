@@ -35,32 +35,46 @@ _HAS_PREFIX = re.compile(r"^\s*(?:[A-Za-z0-9_.()-]+:)?[cgmnrp]\.", re.IGNORECASE
 def hgvs_field_valid(leaf: str, value: str, record: dict[str, Any] | None = None) -> bool:
     """True if `value` is structurally valid HGVS for field `leaf`.
 
-    Order of trust:
+    Order of trust (HGVS-OPTIONS Option 1 — user's locked decision):
       1. If `record.hgvs_normalized.valid` is True (the extractor already called
-         `hgvs_validate` during extraction and the tool said valid), accept it —
-         no re-check. This avoids re-running the same validator on the same value
-         and dodging a downstream invalid_hgvs → VMAW → SME round-trip when the
-         agent already did the work.
-      2. Otherwise, run `hgvs_validate` against the value as-is.
-      3. If that fails AND the printed value lacks the field's prefix (c./g./p.),
-         retry once with the prefix. Per the v4 schema, "1849G>T" verbatim is
-         legitimate; the verifier just needs to confirm it parses as c.1849G>T.
+         `hgvs_validate` during extraction and the tool said valid), accept it.
+      2. If the agent CITED the value (`record.evidence_block_ids` or
+         `record.occurrences[].block_id` present), trust it — the agent read the
+         source, decided it's HGVS, and pointed at the block. A byte-level
+         re-validation with a dumber regex tool only re-rejects OCR artifacts
+         (unicode minus `U+2212`, hyphen `U+2010`, NBSP, etc.) that the agent
+         already saw the right glyph for. The schema asks for the value VERBATIM
+         anyway, and the binding verifier (V1) is the dedicated grounding check.
+      3. Otherwise — UNCITED — run the deterministic check (regex / biocommons):
+            (a) as-is, then (b) prefix-retry with `c.`/`g.`/`p.`. This is the
+         hallucination safety net for values the agent didn't ground.
 
-    Only when ALL of the above fail is the value considered genuinely malformed.
+    Net effect: grounded HGVS NEVER lands on the invalid_hgvs path → never
+    reaches VMAW → never reaches SME for the OCR-artifact class the user
+    explicitly does not want escalated.
     """
     # (1) Trust the agent's own tool result when present.
     norm = (record or {}).get("hgvs_normalized") if isinstance(record, dict) else None
     if isinstance(norm, dict) and norm.get("valid") is True:
         return True
 
+    # (2) Trust grounded extractions (HGVS-OPTIONS Option 1).
+    if isinstance(record, dict):
+        if record.get("evidence_block_ids"):
+            return True
+        occs = record.get("occurrences")
+        if isinstance(occs, list) and any(
+            isinstance(o, dict) and o.get("block_id") for o in occs
+        ):
+            return True
+
+    # (3) Uncited values: run the deterministic safety-net check.
     from preprocess.hgvs_validate import hgvs_validate
     raw = (value or "").strip()
     if not raw:
         return True  # empty/null is not 'malformed' — absence, handled elsewhere
-    # (2) try as-is
     if hgvs_validate(raw).get("valid"):
         return True
-    # (3) prefix retry
     pref = FIELD_PREFIX.get(leaf)
     if pref and not _HAS_PREFIX.match(raw):
         return bool(hgvs_validate(f"{pref}.{raw}").get("valid"))

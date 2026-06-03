@@ -74,7 +74,15 @@ _DEFAULT_CAPS = ["va"]
 # ground it (status=unresolved), drop the record from the envelope and keep the
 # payload in the SME queue for audit/restore. Only these "no-support" kinds drop;
 # everything else (needs_review, binding_uncertain, …) stays flagged in the queue.
-_DROPPABLE_ON_UNRESOLVED = {"binding_refuted", "link_cannot_form"}
+#
+# HGVS-OPTIONS Option 1 complement (user: "never escalate HGVS to SME"). With the
+# verifier now trusting grounded extractions, the only invalid_hgvs that reaches
+# VMAW is an UNCITED genuinely-malformed value (the rare hallucination path). If
+# VMAW's CITE/EC capabilities also can't ground it, drop the field — the agent
+# couldn't find evidence + VMAW couldn't either, so the value is unsupportable.
+# The dropped payload is preserved in the queue for audit/restore, identical to
+# the binding_refuted / link_cannot_form path.
+_DROPPABLE_ON_UNRESOLVED = {"binding_refuted", "link_cannot_form", "invalid_hgvs"}
 
 
 # -- SME queue banding ------------------------------------------------------
@@ -221,6 +229,17 @@ class VMAWAgent:
             confidence=conf)
 
         # ---- the autonomy decision -----------------------------------------
+        # Refute-class kinds (binding_refuted / link_cannot_form): when VMAW's
+        # investigation returns ungrounded, uncontested, with a non-empty rationale,
+        # that IS the refutation — VMAW agrees the binding/link cannot form. Route
+        # to a new `vmaw_refuted` status so the drop branch fires. Mirrors the
+        # gap-#5 cardinal rule (drop after re-extract + recurrence) but fires on
+        # an ACTIVE refutation with evidence, not silent exhaustion.
+        if (kind in _DROPPABLE_ON_UNRESOLVED
+                and not grounded and not contested
+                and str(out.get("rationale") or "").strip()):
+            res.status = "vmaw_refuted"
+            return res
         # Contested adjudication → never silently pick (T17) → SME ratify.
         if contested or cap == "va":
             res.status = "proposed_for_sme"
@@ -254,6 +273,21 @@ class VMAWAgent:
                 self._apply(envelope, item, res)         # mutate ground truth (grounded only)
                 auto += 1
                 # item leaves the SME queue entirely
+            elif res.status == "vmaw_refuted":
+                # VMAW investigated a refute-class item and concurred no support exists →
+                # DROP the record from the envelope; keep the payload + rationale for SME
+                # audit. Mirrors the unresolved-drop path but fires on an ACTIVE refutation
+                # (rationale present) instead of "no capability produced a value".
+                removed = self._drop_record(envelope, res.item_ref)
+                enriched = dict(item)
+                enriched["kind"] = "dropped_ungroundable"
+                enriched["dropped_record"] = removed
+                enriched["vmaw_note"] = {
+                    "status": "vmaw_refuted",
+                    "reason": "VMAW investigated and confirmed no support; record removed",
+                    "rationale": res.rationale}
+                new_queue.append(enriched)
+                dropped += 1
             elif res.status == "proposed_for_sme":
                 enriched = dict(item)
                 enriched["vmaw_proposal"] = {

@@ -140,7 +140,68 @@ class LinkRegistry:
         if isinstance(conf, (int, float)) and conf < min_confidence:
             return False, f"confidence {float(conf):.2f} < floor {min_confidence:.2f}"
 
+        # Same-gene-key required for the registered gene-pair link types. Today the
+        # deterministic seed only emits these when HGNC genes match, but the LLM
+        # adjudicator can label any pair-shaped proposal with one of these types and
+        # slip past the endpoint check. Cross-checking the gene keys here closes
+        # that gap (Patch 2). Soft-fails: when either side has no resolvable gene
+        # key (e.g. v3 nested biomarker without variant_detail), we skip the check
+        # rather than drop a possibly-valid link.
+        if typ in _GENE_PAIR_TYPES:
+            ga = _link_gene_key(envelope, frm)
+            gb = _link_gene_key(envelope, to)
+            if ga and gb and ga != gb:
+                return False, (
+                    f"gene_key mismatch for {typ!r}: from={ga!r} ≠ to={gb!r}"
+                )
+
         return True, "ok"
+
+
+# -- gene-pair validator support (Patch 2) ---------------------------------
+#
+# Link types whose semantics REQUIRE both endpoint records to canonicalize to
+# the SAME gene (e.g. JAK2 variant ↔ JAK2 panel entry). Listing them here lets
+# `validate_link` reject the cross-gene case (e.g. TP53 variant ↔ MSI biomarker)
+# even when the endpoint sections match the registered pair — closing the gap
+# the LLM adjudicator can otherwise slip through. Keep the per-section gene-key
+# field in sync with config/section_layout.yaml `gene_key_field`.
+_GENE_PAIR_TYPES = {"tested_to_result", "variant_on_panel"}
+_GENE_KEY_FIELDS = {
+    "Genomic_Variant_umbrella":           "gene_studied",
+    "other_molecular_biomarker_umbrella": "biomarker_name",
+    "tested_biomarker_umbrella":          "*",   # record IS the gene string
+}
+
+
+def _link_gene_key(envelope: dict[str, Any], ref: str | None) -> str | None:
+    """Resolve a record at `ref` and return its UPPER-cased gene key per
+    _GENE_KEY_FIELDS. Returns None when the section isn't gene-keyed, the ref
+    doesn't resolve, or the field is empty (soft-fail — caller skips the check)."""
+    section = _ref_section(ref)
+    gkf = _GENE_KEY_FIELDS.get(section or "")
+    if not gkf:
+        return None
+    toks = _ref_tokens(ref)
+    if not toks:
+        return None
+    node: Any = envelope
+    for t in toks:
+        try:
+            if isinstance(t, str):
+                node = node.get(t) if isinstance(node, dict) else None
+            else:
+                node = node[t] if isinstance(node, list) and 0 <= t < len(node) else None
+        except (AttributeError, KeyError, IndexError, TypeError):
+            return None
+        if node is None:
+            return None
+    if gkf == "*":
+        return str(node).strip().upper() or None
+    if isinstance(node, dict):
+        val = node.get(gkf)
+        return str(val).strip().upper() if val else None
+    return None
 
 
 # -- module-level ref helpers (shared shape with Linker) --------------------

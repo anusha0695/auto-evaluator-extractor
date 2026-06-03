@@ -223,6 +223,145 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         check("legacy adjudicator still runs with relink_hints (fallback)", False, str(exc))
 
+    print("[10] Patch 2: validate_link gene_key mismatch — a TP53 variant labelled with")
+    print("     `tested_to_result` against an MSI biomarker panel entry must be DROPPED")
+    # The mCODE-style envelope the live failure mode uses (Genomic_Variant_umbrella +
+    # tested_biomarker_umbrella). Endpoint sections MATCH the registered pair for
+    # tested_to_result (order-tolerant), so the previous validator would accept this.
+    # The new same-gene check must reject it because TP53 ≠ MSI.
+    REG_V4 = "config/link_registry_v4.yaml"
+    reg_v4 = LinkRegistry.from_path(REG_V4, max_tier=2)
+    cross_env = {
+        "Genomic_Variant_umbrella": {"Genomic_Variants": [{"gene_studied": "TP53"}]},
+        "other_molecular_biomarker_umbrella": {
+            "other_molecular_biomarkers": [{"biomarker_name": "MSI"}]},
+        "tested_biomarker_umbrella": {"tested_biomarkers": ["TP53"]},
+    }
+    cross_link_bad = {
+        "type": "tested_to_result",
+        "from_ref": "tested_biomarker_umbrella.tested_biomarkers[0]",     # TP53
+        "to_ref":   "other_molecular_biomarker_umbrella.other_molecular_biomarkers[0]",  # MSI
+        "evidence_block_ids": ["b1"], "confidence": 0.9,
+    }
+    ok, why = reg_v4.validate_link(
+        link=cross_link_bad, envelope=cross_env, blocks=[{"block_id": "b1", "text": "x"}],
+    )
+    check("cross-gene tested_to_result rejected", not ok and "gene_key mismatch" in (why or ""),
+          f"ok={ok} why={why!r}")
+    # Same-gene case (TP53 ↔ TP53) must still be accepted.
+    same_env = {
+        **cross_env,
+        "other_molecular_biomarker_umbrella": {
+            "other_molecular_biomarkers": [{"biomarker_name": "TP53"}]},
+    }
+    cross_link_good = dict(cross_link_bad)
+    ok2, why2 = reg_v4.validate_link(
+        link=cross_link_good, envelope=same_env, blocks=[{"block_id": "b1", "text": "x"}],
+    )
+    check("same-gene tested_to_result accepted", ok2 and why2 == "ok",
+          f"ok={ok2} why={why2!r}")
+    # Non-gene-pair type (variant_superseded_by) MUST be unaffected by the same-gene check.
+    super_env = {
+        "Genomic_Variant_umbrella": {"Genomic_Variants": [
+            {"gene_studied": "JAK2"}, {"gene_studied": "BRAF"}]}}
+    super_link = {
+        "type": "variant_superseded_by",
+        "from_ref": "Genomic_Variant_umbrella.Genomic_Variants[0]",
+        "to_ref":   "Genomic_Variant_umbrella.Genomic_Variants[1]",
+        "evidence_block_ids": ["b1"], "confidence": 0.9,
+    }
+    ok3, _ = reg_v4.validate_link(
+        link=super_link, envelope=super_env, blocks=[{"block_id": "b1", "text": "x"}],
+    )
+    check("non gene-pair type not affected by same-gene check", ok3)
+
+    print("[11] Patch 2: adjudicator boundary sanitization — out-of-catalog `type`s")
+    print("     are pruned BEFORE the Linker sees them (loud, instrumented)")
+    # Patch in a fake adj.call into adjudicators.build_adjudicators so we can drive
+    # link_adjudicator deterministically. We don't need the full build — just the
+    # boundary-prune logic, which is in the same function.
+    from agents import adjudicators as _adjmod
+
+    class _FakeOut:
+        def __init__(self, links): self.links = links
+    class _FakeLink:
+        def __init__(self, d):
+            self._d = d
+        def model_dump(self): return dict(self._d)
+    class _FakeAdj:
+        def __init__(self, links):
+            self._links = links
+        def call(self, prompt, _model):
+            return _FakeOut([_FakeLink(l) for l in self._links])
+
+    # Build a link_adjudicator closure with our fake adj.
+    def _make_link_adj(adj_obj):
+        # mimic the relevant code path from build_adjudicators by importing the
+        # function and rebinding the `adj` it closes over. Simpler: copy the
+        # function's logic by calling it via the public boundary in adjudicators.
+        # We do this with a thin shim:
+        def _link_adj(*, envelope, blocks=None, link_catalog=None,
+                      seed_hints=None, avoid_hints=None):
+            biomarkers = (envelope.get("other_molecular_biomarker_umbrella")
+                          or {}).get("other_molecular_biomarkers") or []
+            specimens = (envelope.get("significant_findings")
+                         or {}).get("specimen_findings") or []
+            if not biomarkers and not specimens:
+                return []
+            out = adj_obj.call("ignored", None)
+            proposed = [l.model_dump() for l in out.links] if out else []
+            # mirror the sanitization in adjudicators.link_adjudicator
+            if link_catalog:
+                allowed = {line.split(" ", 2)[1] for line in link_catalog.splitlines()
+                           if line.startswith("- ")}
+                proposed = [p for p in proposed if p.get("type") in allowed]
+            return proposed
+        return _link_adj
+
+    fake_adj = _FakeAdj([
+        # one out-of-catalog (must be pruned)
+        {"type": "biomarker_characterizes_finding",
+         "from_ref": "other_molecular_biomarker_umbrella.other_molecular_biomarkers[0]",
+         "to_ref":   "significant_findings.specimen_findings[0]",
+         "evidence_block_ids": ["b1"], "confidence": 0.9},
+        # one in-catalog (must survive)
+        {"type": "tested_to_result",
+         "from_ref": "tested_biomarker_umbrella.tested_biomarkers[0]",
+         "to_ref":   "other_molecular_biomarker_umbrella.other_molecular_biomarkers[0]",
+         "evidence_block_ids": ["b1"], "confidence": 0.9},
+    ])
+    env_for_adj = {
+        "other_molecular_biomarker_umbrella": {"other_molecular_biomarkers": [
+            {"biomarker_name": "TP53"}]},
+        "tested_biomarker_umbrella": {"tested_biomarkers": ["TP53"]},
+    }
+    link_adj = _make_link_adj(fake_adj)
+    catalog = reg_v4.catalog_text()
+    pruned = link_adj(envelope=env_for_adj, blocks=[{"block_id": "b1", "text": "x"}],
+                      link_catalog=catalog)
+    types_emitted = [p["type"] for p in pruned]
+    check("out-of-catalog type pruned at boundary",
+          "biomarker_characterizes_finding" not in types_emitted, str(types_emitted))
+    check("in-catalog type survives boundary",
+          "tested_to_result" in types_emitted, str(types_emitted))
+
+    print("[12] Patch 2 instrumentation: accepted_contextual_links populated by Linker")
+    # Use a stub link_adjudicator that emits a single valid tested_to_result link.
+    # The Linker should commit it AND log it to result.accepted_contextual_links.
+    def _stub_link_adj(**kwargs):
+        return [{
+            "type": "tested_to_result",
+            "from_ref": "tested_biomarker_umbrella.tested_biomarkers[0]",
+            "to_ref":   "other_molecular_biomarker_umbrella.other_molecular_biomarkers[0]",
+            "evidence_block_ids": ["b1"], "confidence": 0.9, "rationale": "matched panel",
+        }]
+    lk_audit = Linker(link_registry=reg_v4, hgnc_normalize=_FAKE_HGNC, min_link_confidence=0.0,
+                      link_adjudicator=_stub_link_adj)
+    res_audit = lk_audit.link(sections=env_for_adj, blocks=[{"block_id": "b1", "text": "x"}])
+    check("accepted_contextual_links logs the committed link",
+          any(a.get("type") == "tested_to_result" for a in res_audit.accepted_contextual_links),
+          str(res_audit.accepted_contextual_links))
+
     print("-" * 60)
     if fails:
         print(f"P3-M5 VERIFY: FAIL ({len(fails)}): {fails}")

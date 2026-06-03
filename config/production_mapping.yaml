@@ -25,18 +25,31 @@ mode: identity_v4
 # the built-in default (config/schemas/genomic_pathology_v4.json).
 schema: config/schemas/genomic_pathology_v4.json
 
-# Sections emitted to production, in order. These are the active v4 umbrellas;
-# the disabled sections (significant_findings, clinical_information) are omitted
-# (they're not in a v4 envelope). Re-add them here if those teams are re-enabled.
-sections:
-  - count_of_extracted_objects
-  - report_metadata
-  - Genomic_Variant_umbrella
-  - other_molecular_biomarker_umbrella
-  - tested_biomarker_umbrella
+# Sections are DERIVED from the schema automatically — every top-level property, in
+# schema order. Add a field or a whole section to the schema and production tracks
+# it with NO edit here. `exclude_sections` is the only knob: it suppresses sections
+# that exist in the schema but are disabled in this pipeline (their teams are off in
+# teams_v4.yaml). Today that's significant_findings + clinical_information.
+exclude_sections:
+  - significant_findings
+  - clinical_information
 
-# Internal-only keys stripped at EVERY nesting level — our additions that are not
-# part of the mCODE contract and must never ship to production.
+# Optional manual override — uncomment to pin an explicit section list/order; this
+# WINS over schema derivation. Leave commented to stay schema-driven.
+# sections:
+#   - count_of_extracted_objects
+#   - report_metadata
+#   - Genomic_Variant_umbrella
+#   - other_molecular_biomarker_umbrella
+#   - tested_biomarker_umbrella
+
+# Internal-only keys stripped at EVERY nesting level. This list CANNOT be derived
+# from the schema: four of these (provenance, needs_review, review_reason,
+# hgvs_normalized) are real schema-defined fields we deliberately withhold from
+# production; the rest are runtime keys we add that aren't in the schema (those
+# would be dropped anyway, but listing them is explicit). It's a curatorial choice,
+# not a schema fact — so it stays here. It does NOT need editing when you add or
+# rename ordinary clinical fields in the schema.
 strip_keys:
   - provenance
   - needs_review

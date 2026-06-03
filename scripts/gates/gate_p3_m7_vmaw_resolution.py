@@ -213,6 +213,35 @@ def main() -> int:
     check("vmaw → decision_router", ("vmaw", "decision_router") in edges)
     check("triage no longer goes straight to router", ("triage", "decision_router") not in edges)
 
+    print("[8] vmaw_refuted: VMAW investigates a link_cannot_form, returns ungrounded +")
+    print("    uncontested + rationale  →  link is DROPPED (not proposed_for_sme)")
+    # Mirrors the live failure mode from the SME queue (TP53↔MSI, STK11↔LZTR1, STK11↔NTRK).
+    # VA returns a refutation rationale with no grounding evidence — that IS the refutation,
+    # so the link should be removed from the envelope, not surfaced to SME under 'judgment'.
+    def _va_refute(*args, **kwargs):
+        return {"value": True, "block_ids": [], "rationale":
+                "Source explicitly lists them separately with their own results.",
+                "confidence": 0.9, "contested": False}
+    refute_env = {"links": [{
+        "from_ref": "Genomic_Variant_umbrella.Genomic_Variants[0]",
+        "to_ref": "other_molecular_biomarker_umbrella.other_molecular_biomarkers[0]",
+        "type": "tested_to_result"}]}
+    refute_item = {"kind": "link_cannot_form", "ref": "links[0]",
+                   "section": "links", "detail": "TP53 / MSI"}
+    out_ref = VMAWAgent(adjudicate_value_fn=_va_refute).resolve({
+        "extraction": refute_env, "escalation_queue": [refute_item],
+        "doc_profile": {"blocks": []}})
+    new_q = out_ref["escalation_queue"]
+    check("link_cannot_form removed from queue under that kind",
+          not any(it.get("kind") == "link_cannot_form" for it in new_q), str(new_q))
+    check("dropped item carries vmaw_refuted note (not 'dropped')",
+          any((it.get("vmaw_note") or {}).get("status") == "vmaw_refuted" for it in new_q))
+    check("dropped item carries the VMAW rationale for SME audit",
+          any("separately" in str((it.get("vmaw_note") or {}).get("rationale") or "")
+              for it in new_q))
+    check("link removed from envelope",
+          not out_ref["extraction"].get("links"), str(out_ref["extraction"].get("links")))
+
     print("-" * 60)
     if fails:
         print(f"P3-M7 VERIFY: FAIL ({len(fails)}): {fails}")

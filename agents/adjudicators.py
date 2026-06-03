@@ -232,11 +232,27 @@ def build_llm_adjudicators(*, model_name: str | None = None, temperature: float 
         prompt = (
             "You build the relationship graph for a pathology extraction. "
             + catalog_block + hints_block + avoid_block +
-            "Rules: (1) emit ONLY a link `type` from the catalog above; (2) refs look like "
-            "'other_molecular_biomarker_umbrella.other_molecular_biomarkers[0]' or "
-            "'significant_findings.specimen_findings[1]'; (3) NEVER invent a link — emit one "
-            "only if you can cite the block_id(s) that state it, in evidence_block_ids; "
-            "(4) set confidence in [0,1].\n\n"
+            "HARD CONSTRAINTS — links you emit are deterministically validated and "
+            "any failing link is DROPPED:\n"
+            "  (1) `type` MUST be one of the catalog types listed above. NEVER emit "
+            "      a `type` that isn't on the list — even if the relationship seems "
+            "      plausible. If no listed type fits, emit nothing for that pair.\n"
+            "  (2) `from_ref` and `to_ref` MUST point to records in the EXACT "
+            "      section endpoints shown next to that type. A `tested_to_result` "
+            "      link, for example, MUST have one endpoint in "
+            "      `tested_biomarker_umbrella` and the other in "
+            "      `other_molecular_biomarker_umbrella` — no other pair is valid.\n"
+            "  (3) For `tested_to_result` and `variant_on_panel`: both endpoint "
+            "      records MUST refer to the SAME gene (same canonical HGNC symbol). "
+            "      Do NOT link a TP53 record to an MSI record, an EGFR variant to a "
+            "      KRAS panel entry, etc. Different genes → different relationship "
+            "      → no link.\n"
+            "  (4) Refs look like 'other_molecular_biomarker_umbrella."
+            "other_molecular_biomarkers[0]' or 'significant_findings."
+            "specimen_findings[1]' — use exactly those array names.\n"
+            "  (5) NEVER invent a link — emit one only if you can cite the "
+            "      block_id(s) that state it, in `evidence_block_ids`; set "
+            "      `confidence` in [0,1].\n\n"
             f"BIOMARKERS: {json.dumps([{'name': b.get('biomarker_name')} for b in biomarkers])[:1000]}\n"
             f"SPECIMENS: {json.dumps([{'specimen': s.get('specimen')} for s in specimens])[:1000]}\n\n"
             f"SOURCE (excerpt):\n{_blocks_text(blocks or [])}"
@@ -244,7 +260,21 @@ def build_llm_adjudicators(*, model_name: str | None = None, temperature: float 
         out = adj.call(prompt, _LinksOut)
         if not out:
             return []
-        return [l.model_dump() for l in out.links]
+        proposed = [l.model_dump() for l in out.links]
+        # Boundary sanitization (Patch 2 step C): drop any proposal whose `type` isn't
+        # in the catalog BEFORE it reaches the Linker. The Linker's validate_link
+        # would catch this too, but pruning here keeps `dropped_contextual_links`
+        # cleaner (no "validation failed: unknown type" noise) and makes the failure
+        # mode loud at the LLM boundary — useful diagnostic for prompt regressions.
+        if link_catalog:
+            allowed = {line.split(" ", 2)[1] for line in link_catalog.splitlines()
+                       if line.startswith("- ")}
+            before = len(proposed)
+            proposed = [p for p in proposed if p.get("type") in allowed]
+            if before != len(proposed):
+                logger.info("link_adjudicator: pruned %d out-of-catalog proposals at boundary",
+                            before - len(proposed))
+        return proposed
 
     def supersession_resolver(*, biomarker: dict[str, Any], addendum_text: str, addendum_block_id: str) -> dict[str, Any]:
         name = biomarker.get("biomarker_name")

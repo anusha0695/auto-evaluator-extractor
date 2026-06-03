@@ -23,6 +23,7 @@ second repair selector.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -46,9 +47,17 @@ class Defect:
     target_ref: str | None
     detail: str = ""
     candidate_block_ids: list[str] = field(default_factory=list)
+    # Content-derived recur-guard key (optional). When set, the recur-guard
+    # tracks the underlying DEFECT (e.g. a specific gene-pair link) instead of
+    # the envelope INDEX it happens to occupy. Prevents a re-proposed link at a
+    # different `links[N]` index from looking "new" and burning the budget. The
+    # raw `target_ref` is still used everywhere else (routing, ledger, UI).
+    content_signature: str | None = None
 
     @property
     def signature(self) -> str:
+        if self.content_signature:
+            return f"{self.team}|{self.content_signature}|{self.defect_type}"
         return f"{self.team}|{self.target_ref}|{self.defect_type}"
 
 
@@ -73,10 +82,101 @@ _ADDRESSABLE = {
 }
 # Actions that need a targetable team (the rest operate on a ref / block directly).
 _TEAM_REQUIRED = {"re_extract_team", "reprofile_block"}
+# Deterministic repairs that do NOT count against the global budget. The budget is
+# meant to bound LLM cost + prevent runaway loops on hard cases; deterministic
+# rewrites have neither problem (no LLM call; natural stopping condition — after
+# the rewrite the canonical matches → the same defect can't fire again, which the
+# recur-guard catches anyway). Counting them against the cap starves cheap safe
+# fixes whenever an expensive one fires first (e.g. normalization_invalid items
+# in the live SME queue showing "global repair budget (8) exhausted").
+_DETERMINISTIC = {"renormalize_field"}
 # Defects that need human judgment → always escalate (skip repair, straight to the
 # escalation queue → VMAW). Re-extraction-proof kinds belong here; the agent router
 # (triage_llm) can additionally route an addressable defect to 'escalate' per-case.
 _ESCALATE_ONLY = {"binding_uncertain", "needs_review", "invalid_hgvs"}
+
+
+# Per-section field that carries the gene identity for content-signature use.
+# Keep in sync with config/section_layout.yaml `gene_key_field`. Used ONLY by the
+# recur-guard's content-derived signature for link refutations — runtime gene-key
+# resolution still goes through the Linker, which loads section_layout.yaml.
+_LINK_GENE_FIELDS = {
+    "Genomic_Variant_umbrella":           "gene_studied",
+    "other_molecular_biomarker_umbrella": "biomarker_name",
+    "tested_biomarker_umbrella":          "*",   # record IS the gene string
+}
+
+
+def _resolve_at(envelope: dict[str, Any], ref: str | None) -> Any:
+    """Walk a dotted/indexed ref into the envelope. Returns None when any step
+    misses. Pure / never raises."""
+    if not ref:
+        return None
+    node: Any = envelope
+    for tok in re.finditer(r"([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]", str(ref)):
+        name, idx = tok.group(1), tok.group(2)
+        try:
+            if name is not None:
+                node = node.get(name) if isinstance(node, dict) else None
+            else:
+                i = int(idx)
+                node = node[i] if isinstance(node, list) and 0 <= i < len(node) else None
+        except (AttributeError, KeyError, IndexError, TypeError):
+            return None
+        if node is None:
+            return None
+    return node
+
+
+def _gene_key_at(envelope: dict[str, Any], record_ref: str | None) -> str | None:
+    """Resolve a record at `record_ref` and return its canonical gene key per
+    _LINK_GENE_FIELDS. Returns None when the record / field can't be found."""
+    if not record_ref:
+        return None
+    section = _section_of(record_ref)
+    gkf = _LINK_GENE_FIELDS.get(section or "")
+    if not gkf:
+        return None
+    rec = _resolve_at(envelope, record_ref)
+    if rec is None:
+        return None
+    if gkf == "*":
+        return str(rec).strip().upper() or None       # tested_biomarkers[] is bare string
+    if isinstance(rec, dict):
+        val = rec.get(gkf)
+        return str(val).strip().upper() if val else None
+    return None
+
+
+def _link_content_signature(state: dict[str, Any], link_ref: str | None) -> str | None:
+    """Stable signature for a link refutation based on its CONTENT (canonical
+    gene pair + type), not the array index. Order-tolerant (A↔B == B↔A).
+    Returns None when the link or its endpoints can't be resolved — caller
+    falls back to the index-based signature."""
+    if not link_ref:
+        return None
+    # state["links"] is the Linker's emitted list (also present in
+    # verification_v2.json); fall back to envelope["links"] if not threaded.
+    links = state.get("links")
+    if not isinstance(links, list):
+        links = (state.get("extraction") or {}).get("links")
+    m = re.match(r"links\[(\d+)\]", str(link_ref))
+    if not m or not isinstance(links, list):
+        return None
+    i = int(m.group(1))
+    if not (0 <= i < len(links)):
+        return None
+    link = links[i] if isinstance(links[i], dict) else None
+    if not link:
+        return None
+    envelope = state.get("extraction") or {}
+    a = _gene_key_at(envelope, link.get("from_ref"))
+    b = _gene_key_at(envelope, link.get("to_ref"))
+    ltype = str(link.get("type") or "").strip()
+    if not (a and b and ltype):
+        return None
+    lo, hi = sorted([a, b])                            # order-tolerant
+    return f"link:{ltype}:{lo}<->{hi}"
 
 
 def build_defects(state: dict[str, Any]) -> list[Defect]:
@@ -195,10 +295,15 @@ def build_defects(state: dict[str, Any]) -> list[Defect]:
             section = it.get("section") or _section_of(ref or "")
             if verdict == "refuted":
                 is_link = str(it.get("check") or "").upper() == "V4"
+                # For V4 link refutations, derive a content-based signature so the
+                # recur-guard tracks the SAME bad gene-pair across cycles even if
+                # the linker re-emits it at a different `links[N]` index.
+                content_sig = _link_content_signature(state, ref) if is_link else None
                 defects.append(Defect(
                     defect_type="link_cannot_form" if is_link else "binding_refuted",
                     section=section, team=_SECTION_TEAM.get(section), target_ref=ref,
-                    detail=str(it.get("evidence") or "bind not supported")[:200]))
+                    detail=str(it.get("evidence") or "bind not supported")[:200],
+                    content_signature=content_sig))
             elif verdict == "uncertain":
                 defects.append(Defect(
                     defect_type="binding_uncertain", section=section, team=None,
@@ -315,10 +420,14 @@ class TriageAgent:
             if per_team_done.get(d.team, 0) >= self._per_team_cap:
                 esc(f"per-team repair cap ({self._per_team_cap}) reached for {d.team}")
                 continue
-            # global cap (count already-used + pending in this cycle).
-            if budget_used + len(requests) >= global_cap:
-                esc(f"global repair budget ({global_cap}) exhausted")
-                continue
+            # global cap (count already-used + pending in this cycle). Deterministic
+            # actions (renormalize_field) are exempt — they have a natural stopping
+            # condition and cost no LLM calls, so the budget shouldn't starve them.
+            if action not in _DETERMINISTIC:
+                non_det_pending = sum(1 for r in requests if r.get("action") not in _DETERMINISTIC)
+                if budget_used + non_det_pending >= global_cap:
+                    esc(f"global repair budget ({global_cap}) exhausted")
+                    continue
             requests.append({
                 "action": action, "team": d.team, "section": d.section,
                 "target_ref": d.target_ref, "defect_type": d.defect_type,

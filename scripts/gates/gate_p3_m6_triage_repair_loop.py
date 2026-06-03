@@ -403,6 +403,96 @@ def main() -> int:
     check("re-detected standing defect is NOT duplicated in the queue",
           len(out2["escalation_queue"]) == len(q1), f"{len(q1)}→{len(out2['escalation_queue'])}")
 
+    print("[9] recur-guard content-signature: re-proposed link at a different index")
+    print("    must MATCH the prior signature (not look 'new' under the index key)")
+    # The Linker re-emits the same TP53/MSI link, first at links[0] then at links[3]
+    # after dedup-style shuffles. The recur-guard MUST treat them as the SAME defect
+    # and force-escalate the second occurrence regardless of remaining budget.
+    env_a = {
+        "Genomic_Variant_umbrella": {"Genomic_Variants": [{"gene_studied": "TP53"}]},
+        "other_molecular_biomarker_umbrella": {
+            "other_molecular_biomarkers": [{"biomarker_name": "MSI"}]},
+    }
+    link_obj = {"from_ref": "Genomic_Variant_umbrella.Genomic_Variants[0]",
+                "to_ref": "other_molecular_biomarker_umbrella.other_molecular_biomarkers[0]",
+                "type": "tested_to_result"}
+    state_a = {"doc_id": "t", "active_team_keys": ["molecular_biomarker_team"],
+               "verifier_scorecards": [], "binding_verifier": {"refuted": 1, "uncertain": 0},
+               "binding_items": [{"ref": "links[0]", "check": "V4", "verdict": "refuted",
+                                  "section": "other_molecular_biomarker_umbrella",
+                                  "evidence": "TP53 and MSI listed separately"}],
+               "extraction": env_a, "links": [link_obj], "defect_signatures_seen": []}
+    link_defects_a = [d for d in build_defects(state_a) if d.defect_type == "link_cannot_form"]
+    check("link_cannot_form defect built with a content_signature",
+          bool(link_defects_a) and link_defects_a[0].content_signature is not None,
+          str([d.content_signature for d in link_defects_a]))
+    check("content_signature contains both gene keys",
+          bool(link_defects_a) and "TP53" in (link_defects_a[0].content_signature or "")
+          and "MSI" in (link_defects_a[0].content_signature or ""),
+          str(link_defects_a[0].content_signature if link_defects_a else None))
+
+    # same link re-emitted at links[3]
+    state_b = {**state_a,
+               "binding_items": [{"ref": "links[3]", "check": "V4", "verdict": "refuted",
+                                  "section": "other_molecular_biomarker_umbrella",
+                                  "evidence": "same TP53/MSI link refuted again"}],
+               "links": [{}, {}, {}, link_obj]}
+    link_defects_b = [d for d in build_defects(state_b) if d.defect_type == "link_cannot_form"]
+    check("re-proposed link (different index) → SAME signature",
+          bool(link_defects_b)
+          and link_defects_b[0].signature == link_defects_a[0].signature,
+          f"a={link_defects_a[0].signature if link_defects_a else 'NONE'}  "
+          f"b={link_defects_b[0].signature if link_defects_b else 'NONE'}")
+
+    # recur-guard must escalate even though the raw target_ref differs.
+    state_c = dict(state_b)
+    state_c["defect_signatures_seen"] = [link_defects_a[0].signature] if link_defects_a else []
+    dec = TriageAgent().decide(state_c)
+    link_reqs = [r for r in dec.repair_requests if r.get("defect_type") == "link_cannot_form"]
+    link_escs = [e for e in dec.escalations if e.get("kind") == "link_cannot_form"]
+    check("recur-guard escalates the SAME defect at a different index",
+          not link_reqs and bool(link_escs),
+          f"repairs={link_reqs} escalations={link_escs}")
+    check("escalation reason names 'recurred'",
+          bool(link_escs) and "recurred" in str(link_escs[0].get("reason", "")),
+          str(link_escs[0] if link_escs else None))
+
+    print("[10] Fix 2: deterministic renormalize_field is EXEMPT from the global budget")
+    print("     (LLM-touching actions fill the cap; deterministic rewrites still ride through)")
+    # 8 schema_errors fill the budget (active_teams=4 → cap = 4 × 2 = 8). Two
+    # normalization_invalid defects request renormalize_field. Pre-Fix-2 they would
+    # escalate as "global repair budget exhausted". Post-Fix-2 they ride through.
+    schema_field_errors = [
+        {"loc": f"Genomic_Variant_umbrella.Genomic_Variants[{i}].field", "msg": "missing"}
+        for i in range(8)
+    ]
+    normalization_errors = [
+        {"ref": "other_molecular_biomarker_umbrella.other_molecular_biomarkers[1].method",
+         "normalizer_key": "method", "input": "Next-generation sequencing", "canonical": "NGS"},
+        {"ref": "other_molecular_biomarker_umbrella.other_molecular_biomarkers[2].method",
+         "normalizer_key": "method", "input": "Next-generation sequencing", "canonical": "NGS"},
+    ]
+    st_det = {
+        "extraction": {},
+        "active_team_keys": ["genomic_variant_team", "molecular_biomarker_team",
+                             "tested_biomarker_team", "metadata_team"],
+        "verifier_scorecards": [
+            {"verifier_name": "schema_validator", "passed": False,
+             "field_errors": schema_field_errors},
+            {"verifier_name": "normalization", "passed": True,
+             "field_errors": normalization_errors},
+        ],
+        "binding_verifier": {"refuted": 0, "uncertain": 0},
+        "binding_items": [],
+    }
+    dec_det = TriageAgent().decide(st_det)
+    renorm_reqs = [r for r in dec_det.repair_requests if r["action"] == "renormalize_field"]
+    norm_escs = [e for e in dec_det.escalations if e.get("kind") == "normalization_invalid"]
+    check("renormalize_field ALL rode through even with non-deterministic budget consumed",
+          len(renorm_reqs) == 2, f"renorm={renorm_reqs}")
+    check("no normalization_invalid items escalated due to budget",
+          not norm_escs, str(norm_escs))
+
     print("-" * 60)
     if fails:
         print(f"P3-M6 VERIFY: FAIL ({len(fails)}): {fails}")
