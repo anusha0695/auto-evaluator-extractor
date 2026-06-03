@@ -21,7 +21,7 @@
 .PHONY: help setup install install-phase2 venv \
         verify verify-cloud verify-phase2 verify-phase3 \
         lint lint-fix format typecheck test test-cov \
-        run-local score to-production ui snapshot \
+        run-local score to-production ui portal snapshot \
         clean clean-cache clean-venv
 
 # ----- variables --------------------------------------------------------------
@@ -142,6 +142,9 @@ ui:  ## Launch the Streamlit results browser — usage: make ui PHASE=1
 	  --server.headless=true \
 	  --server.port=8501 \
 	  --server.runOnSave=true
+
+portal:  ## Launch the Flask SME Review Portal — usage: make portal [PORT=8600]
+	PYTHONPATH=. PORT=$${PORT:-8501} $(PY) ui/app.py
 
 snapshot:  ## Snapshot a phase to snapshots/phaseN/ — usage: make snapshot PHASE=1
 	$(PY) scripts/snapshot_phase.py --phase $(PHASE)

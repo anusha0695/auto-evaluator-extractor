@@ -79,12 +79,23 @@ def _load_v4_properties(schema_path: str = _V4_SCHEMA_PATH) -> dict[str, Any]:
         return (json.load(fh) or {}).get("properties") or {}
 
 
+#: Link types whose `from_ref` record is the SUPERSEDED record — i.e. its value
+# has been amended by the `to_ref` record (a later addendum). Production output
+# must surface only the amended value, so superseded records are filtered before
+# the envelope is conformed to the schema. Keep in sync with config/link_registry_v4.yaml.
+_SUPERSESSION_LINK_TYPES = {"variant_superseded_by", "superseded_by"}
+
+
 def _identity_v4(envelope: dict[str, Any], mapping: dict[str, Any]) -> dict[str, Any]:
     """Production = the envelope conformed to the production-contract schema:
       • every field DEFINED in the schema is present (missing → null), honoring the
         mCODE rule "every field must appear; absent → null" (covers `required`).
       • internal-only keys (provenance, needs_review, hgvs_normalized, …) are stripped.
       • keys NOT in the schema are dropped (the output is exactly the schema shape).
+      • supersession links (variant_superseded_by) are honored: the superseded
+        record is removed from its array so consumers see only the amended value.
+        Example: when an addendum amends VAF 9% → 10%, the original 9% record is
+        filtered and only the 10% record reaches production.
     Pure / offline. The schema file, sections, and strip keys all come from
     config/production_mapping.yaml — no Python edit needed to retarget."""
     props = _load_v4_properties(mapping.get("schema") or _V4_SCHEMA_PATH)
@@ -97,6 +108,10 @@ def _identity_v4(envelope: dict[str, Any], mapping: dict[str, Any]) -> dict[str,
     # need to pin the set/order manually.
     exclude = set(mapping.get("exclude_sections") or [])
     sections = mapping.get("sections") or [k for k in props if k not in exclude]
+    # Apply supersession filter BEFORE conforming — _apply_supersession_filter
+    # returns a new envelope (does not mutate the caller's) with superseded records
+    # removed from their record arrays.
+    envelope = _apply_supersession_filter(envelope)
     out: dict[str, Any] = {}
     for sec in sections:
         if sec not in props:
@@ -106,6 +121,72 @@ def _identity_v4(envelope: dict[str, Any], mapping: dict[str, Any]) -> dict[str,
             continue
         out[sec] = _conform(envelope.get(sec), props[sec], strip)
     return {_MCODE_ROOT_KEY: out}
+
+
+def _apply_supersession_filter(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Honor supersession links by removing each superseded record from its array.
+
+    For every link in `envelope['links']` whose `type` is in `_SUPERSESSION_LINK_TYPES`,
+    parse `from_ref` (the superseded record) of the form
+    `<section>.<array_field>[<index>]`, and remove that index from the
+    corresponding `envelope[section][array_field]` list.
+
+    Notes
+    -----
+    • Operates on a SHALLOW copy down to the affected array — does not mutate the
+      caller's envelope or unrelated sections.
+    • Indices in remaining links would shift after deletion. Production output is
+      built from the post-filter envelope alone (not links), so this is fine here.
+      Callers that still need stable refs should consume links BEFORE calling this.
+    • If `from_ref` is malformed or the index is out-of-range, that link is silently
+      skipped — the conform step still produces a valid schema-shaped output.
+    • Supersession links are created deterministically by the Linker (gene-key
+      seed pass + _apply_supersession) and are auto-confirmed by the V4 link
+      verifier (method=deterministic), so by the time we reach production the set
+      of supersession links is trustworthy.
+    """
+    import re
+
+    links = envelope.get("links")
+    if not isinstance(links, list) or not links:
+        return envelope
+
+    # group superseded indices by (section, array_field)
+    ref_re = re.compile(r"^([^.\[\]]+)\.([^.\[\]]+)\[(\d+)\]$")
+    by_arr: dict[tuple[str, str], set[int]] = {}
+    for lk in links:
+        if not isinstance(lk, dict):
+            continue
+        if str(lk.get("type") or "") not in _SUPERSESSION_LINK_TYPES:
+            continue
+        m = ref_re.match(str(lk.get("from_ref") or ""))
+        if not m:
+            continue
+        section, arr_field, idx = m.group(1), m.group(2), int(m.group(3))
+        by_arr.setdefault((section, arr_field), set()).add(idx)
+
+    if not by_arr:
+        return envelope
+
+    new_env = dict(envelope)
+    for (section, arr_field), drop_idx in by_arr.items():
+        sec_obj = envelope.get(section)
+        if not isinstance(sec_obj, dict):
+            continue
+        arr = sec_obj.get(arr_field)
+        if not isinstance(arr, list):
+            continue
+        kept = [r for i, r in enumerate(arr) if i not in drop_idx]
+        new_sec = dict(sec_obj)
+        new_sec[arr_field] = kept
+        # If the section carries a count field that mirrors this array, keep it
+        # in sync. Convention: count_of_<arr_field>. Best-effort; silently skip
+        # if the field doesn't exist.
+        count_key = f"count_of_{arr_field}"
+        if count_key in new_sec:
+            new_sec[count_key] = len(kept)
+        new_env[section] = new_sec
+    return new_env
 
 
 def _conform(value: Any, schema_node: dict[str, Any], strip: set[str]) -> Any:

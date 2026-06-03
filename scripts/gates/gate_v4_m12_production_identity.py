@@ -126,6 +126,45 @@ def main() -> int:
     check("legacy mode → pathology_extraction root", "pathology_extraction" in legacy,
           str(list(legacy.keys())))
 
+    print("[6] supersession filter — variant_superseded_by drops the original record")
+    print("    so consumers see only the amended value (original 9% VAF dropped, amended 10% kept)")
+    sup_env = {
+        "report_metadata": {"Patient_First_Name": "Test"},
+        "Genomic_Variant_umbrella": {
+            "count_of_Genomic_Variants": 2,
+            "Genomic_Variants": [
+                {"gene_studied": "JAK2", "amino_acid_change": "V617F",
+                 "variant_allele_frequency": "9%"},   # original — should be DROPPED
+                {"gene_studied": "JAK2", "amino_acid_change": "V617F",
+                 "variant_allele_frequency": "10%"},  # amended — should be KEPT
+            ],
+        },
+        "other_molecular_biomarker_umbrella": {"other_molecular_biomarkers": []},
+        "tested_biomarker_umbrella": {"tested_biomarkers": []},
+        "links": [{
+            "from_ref": "Genomic_Variant_umbrella.Genomic_Variants[0]",
+            "to_ref":   "Genomic_Variant_umbrella.Genomic_Variants[1]",
+            "type":     "variant_superseded_by", "method": "deterministic",
+        }],
+    }
+    sup_out = to_production(sup_env)["genomic_pathology_extraction"]
+    sup_gv = sup_out["Genomic_Variant_umbrella"]
+    check("superseded record removed (1 variant remains, not 2)",
+          len(sup_gv["Genomic_Variants"]) == 1,
+          f"got {len(sup_gv['Genomic_Variants'])} variants")
+    check("surviving record carries the amended value (10%, not 9%)",
+          sup_gv["Genomic_Variants"][0].get("variant_allele_frequency") == "10%",
+          str(sup_gv["Genomic_Variants"][0].get("variant_allele_frequency")))
+    check("count_of_Genomic_Variants updated to match",
+          sup_gv.get("count_of_Genomic_Variants") == 1,
+          str(sup_gv.get("count_of_Genomic_Variants")))
+    # And without the link, both records flow through — proves the filter is
+    # triggered by the link, not by content.
+    no_link_env = {**sup_env, "links": []}
+    no_link_out = to_production(no_link_env)["genomic_pathology_extraction"]
+    check("absent link → both records flow through (filter is link-driven)",
+          len(no_link_out["Genomic_Variant_umbrella"]["Genomic_Variants"]) == 2)
+
     print("-" * 60)
     if fails:
         print(f"V4-M12 VERIFY: FAIL ({len(fails)}): {fails}")

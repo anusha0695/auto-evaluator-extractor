@@ -2,10 +2,11 @@
  * Main Application Controller — SME Review Portal (Multi-Document)
  */
 (function () {
-  // Documents are loaded dynamically. Add entries here or populate via API.
-  const DOCS = [
-    { id: 'demo1', dir: '/artifacts/', label: 'source.pdf', hasPdf: true }
-  ];
+  // Documents are discovered at runtime via GET /api/docs.
+  // The backend scans local_runs/artifacts/<doc_id>/ folders that contain
+  // extraction_v2.json. To add a new doc to the portal, just add a folder
+  // there — no code edits needed.
+  let DOCS = [];
 
   let currentDocIdx = 0;
   let extraction = null, blocks = [], agentTraceData = [], escalationData = null;
@@ -19,7 +20,25 @@
     return r.json();
   }
 
+  async function fetchDocList() {
+    try {
+      const r = await fetch('/api/docs');
+      const j = await r.json();
+      return Array.isArray(j.docs) ? j.docs : [];
+    } catch (e) {
+      console.error('Failed to fetch /api/docs', e);
+      return [];
+    }
+  }
+
   async function init() {
+    DOCS = await fetchDocList();
+    if (DOCS.length === 0) {
+      const list = document.getElementById('docList');
+      if (list) list.innerHTML = '<li style="padding:12px;color:var(--muted)">No documents found in local_runs/artifacts/. Run the pipeline to populate.</li>';
+      return;
+    }
+
     // Load all documents for aggregate stats
     for (const doc of DOCS) {
       try {

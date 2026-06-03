@@ -53,6 +53,12 @@ class Defect:
     # different `links[N]` index from looking "new" and burning the budget. The
     # raw `target_ref` is still used everywhere else (routing, ledger, UI).
     content_signature: str | None = None
+    # For link defects (`link_cannot_form`): the link's registry type at the time
+    # of detection (e.g. "variant_superseded_by", "tested_to_result"). Propagated
+    # into the escalation queue so VMAW's autonomy gate can protect clinically
+    # meaningful link types (supersession) from being silently dropped under the
+    # `_DROPPABLE_ON_UNRESOLVED` rule.
+    link_type: str | None = None
 
     @property
     def signature(self) -> str:
@@ -146,6 +152,28 @@ def _gene_key_at(envelope: dict[str, Any], record_ref: str | None) -> str | None
         val = rec.get(gkf)
         return str(val).strip().upper() if val else None
     return None
+
+
+def _resolve_link_type(state: dict[str, Any], link_ref: str | None) -> str | None:
+    """Resolve the registry `type` of a link at `link_ref` (e.g. 'links[3]'). Used
+    by VMAW's autonomy gate to protect supersession-class links from the silent-drop
+    path. Returns None when the ref doesn't resolve."""
+    if not link_ref:
+        return None
+    links = state.get("links")
+    if not isinstance(links, list):
+        links = (state.get("extraction") or {}).get("links")
+    m = re.match(r"links\[(\d+)\]", str(link_ref))
+    if not m or not isinstance(links, list):
+        return None
+    i = int(m.group(1))
+    if not (0 <= i < len(links)):
+        return None
+    link = links[i] if isinstance(links[i], dict) else None
+    if not link:
+        return None
+    t = link.get("type")
+    return str(t).strip() if t else None
 
 
 def _link_content_signature(state: dict[str, Any], link_ref: str | None) -> str | None:
@@ -299,11 +327,14 @@ def build_defects(state: dict[str, Any]) -> list[Defect]:
                 # recur-guard tracks the SAME bad gene-pair across cycles even if
                 # the linker re-emits it at a different `links[N]` index.
                 content_sig = _link_content_signature(state, ref) if is_link else None
+                # Resolve the link's registry type so VMAW's autonomy gate can
+                # protect supersession-class links from the silent-drop path.
+                ltype = _resolve_link_type(state, ref) if is_link else None
                 defects.append(Defect(
                     defect_type="link_cannot_form" if is_link else "binding_refuted",
                     section=section, team=_SECTION_TEAM.get(section), target_ref=ref,
                     detail=str(it.get("evidence") or "bind not supported")[:200],
-                    content_signature=content_sig))
+                    content_signature=content_sig, link_type=ltype))
             elif verdict == "uncertain":
                 defects.append(Defect(
                     defect_type="binding_uncertain", section=section, team=None,
@@ -375,9 +406,12 @@ class TriageAgent:
         notes: list[str] = []
 
         for d in defects:
-            esc = lambda why: escalations.append({  # noqa: E731
-                "section": d.section, "ref": d.target_ref, "kind": d.defect_type,
-                "detail": d.detail, "reason": why})
+            esc = lambda why, _d=d: escalations.append({  # noqa: E731
+                "section": _d.section, "ref": _d.target_ref, "kind": _d.defect_type,
+                "detail": _d.detail, "reason": why,
+                # Carry the link's registry type through to the queue so VMAW's autonomy
+                # gate can protect supersession-class links. Absent for non-link defects.
+                **({"link_type": _d.link_type} if _d.link_type else {})})
 
             if d.defect_type in _ESCALATE_ONLY:
                 esc("needs human judgment (taxonomy)")
