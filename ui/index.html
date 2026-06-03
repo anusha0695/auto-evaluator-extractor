@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="SME Review Portal for AI Genomic Extraction — Cardinal Health">
+  <title>SME Review Portal — AI Genomic Extraction</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="logo">
+      <svg viewBox="0 0 28 28" fill="none"><rect width="28" height="28" rx="6" fill="rgba(255,255,255,0.15)"/><path d="M7 14h14M14 7v14" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg>
+      <span>SME Review Portal</span>
+    </div>
+    <div class="header-right">
+      <span class="badge-pill">AI Genomic Extraction Review</span>
+    </div>
+  </header>
+  <div class="app-body" style="grid-template-columns: 240px 1fr 1.4fr">
+    <!-- LEFT SIDEBAR -->
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <h3>Queue Statistics</h3>
+        <div class="stat-grid">
+          <div class="stat-card"><div class="stat-value" id="statTotal">1</div><div class="stat-label">Total Docs</div></div>
+          <div class="stat-card green"><div class="stat-value" id="statAccepted">0</div><div class="stat-label">Auto Accepted</div></div>
+        </div>
+        <h3 style="margin-top:12px">Escalation Bands</h3>
+        <div class="stat-grid">
+          <div class="stat-card"><div class="stat-value" id="bandJudgment">0</div><div class="stat-label">Judgment</div></div>
+          <div class="stat-card"><div class="stat-value" id="bandUnresolved">0</div><div class="stat-label">Unresolved</div></div>
+          <div class="stat-card"><div class="stat-value" id="bandReviewLight">0</div><div class="stat-label">Review Light</div></div>
+          <div class="stat-card"><div class="stat-value" id="bandDropAudit">0</div><div class="stat-label">Drop Audit</div></div>
+        </div>
+      </div>
+      <div class="sidebar-section">
+        <h3>Documents</h3>
+        <ul class="doc-list" id="docList"></ul>
+      </div>
+      <div class="sidebar-section">
+        <h3>Pipeline Verdict</h3>
+        <div class="decision-status"><span class="status-dot accepted"></span><span id="verdictText" style="font-weight:600">auto_accept</span></div>
+      </div>
+      <div class="sidebar-section">
+        <h3>Verification Checks</h3>
+        <div class="verifier-list" id="verifierList"></div>
+      </div>
+      <div class="sidebar-section">
+        <h3>SME Decision</h3>
+        <div class="decision-status"><span class="status-dot" id="smeStatusDot"></span><span>Current: </span><span id="smeStatusText" style="font-weight:600">Pending</span></div>
+        <input class="sme-input" type="text" id="smeReviewer" placeholder="Enter your name (required)">
+        <div class="btn-group">
+          <button class="btn btn-accept" onclick="window.app.smeDecision('accept')">✓ Accept</button>
+          <button class="btn btn-reject" onclick="window.app.smeDecision('reject')">✕ Reject</button>
+        </div>
+        <div id="smeMsg" style="font-size:.7rem;color:var(--g400);margin-top:8px"></div>
+      </div>
+    </aside>
+    <!-- CENTER PANEL -->
+    <main class="center-panel">
+      <div class="section-tabs" id="sectionTabs">
+        <div class="section-tab active" data-section="report_metadata">📋 Report Metadata <span class="tab-count" id="countMeta"></span></div>
+        <div class="section-tab" data-section="Genomic_Variant_umbrella">🧬 Genomic Variants <span class="tab-count" id="countVariant"></span></div>
+        <div class="section-tab" data-section="other_molecular_biomarker_umbrella">🔬 Molecular Biomarkers <span class="tab-count" id="countBiomarker"></span></div>
+        <div class="section-tab" data-section="tested_biomarker_umbrella">🧪 Tested Biomarkers <span class="tab-count" id="countTested"></span></div>
+      </div>
+      <div class="extraction-area">
+        <div style="padding:8px 16px;font-size:.75rem;color:var(--g400);background:var(--white);border-bottom:1px solid var(--g100)">Select a row to review it and highlight its source in the PDF →</div>
+        <table class="extraction-table">
+          <thead><tr><th style="width:30px"></th><th>Extraction Field</th><th>Extracted Value</th><th>Source</th><th style="width:100px">SME Action</th></tr></thead>
+          <tbody id="extractionBody"></tbody>
+        </table>
+      </div>
+      <div class="field-detail empty" id="fieldDetail"><span>← Click a field row to see traceability details</span></div>
+    </main>
+    <!-- RIGHT PANEL -->
+    <div class="right-panel">
+      <div class="right-tabs">
+        <div class="right-tab active" data-pane="pdfPane" onclick="window.app.switchRightTab('pdfPane')">📄 Document View</div>
+        <div class="right-tab" data-pane="tracePane" onclick="window.app.switchRightTab('tracePane')">🔍 Agent Trace</div>
+        <div class="right-tab" data-pane="escalationPane" onclick="window.app.switchRightTab('escalationPane')">⚠ Escalations</div>
+      </div>
+      <div class="right-content">
+        <div class="right-pane active" id="pdfPane">
+          <div class="pdf-controls">
+            <div class="page-nav"><span>Page</span><button id="prevPage" onclick="window.pdfViewer.prevPage()">‹</button><span id="pageNum">1</span><button id="nextPage" onclick="window.pdfViewer.nextPage()">›</button></div>
+            <div class="zoom-controls"><button onclick="window.pdfViewer.zoom(-0.15)">−</button><button onclick="window.pdfViewer.zoom(0.15)">+</button><button class="block-toggle on" id="blockToggle" onclick="window.pdfViewer.toggleBlocks()">BLOCKS</button></div>
+          </div>
+          <div class="pdf-canvas-wrap" id="pdfCanvasWrap"><div class="pdf-page-container" id="pdfPageContainer"><canvas id="pdfCanvas"></canvas><div id="blockOverlays"></div></div></div>
+        </div>
+        <div class="right-pane" id="tracePane"><div class="trace-timeline" id="traceTimeline"><div class="loading-spinner">Loading agent trace…</div></div></div>
+        <div class="right-pane" id="escalationPane"><div class="escalation-panel" id="escalationPanel"><div class="loading-spinner">Loading escalations…</div></div></div>
+      </div>
+    </div>
+  </div>
+  <script src="pdf-viewer.js"></script>
+  <script src="agent-trace.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
