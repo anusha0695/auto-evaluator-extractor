@@ -39,12 +39,24 @@ or an explicit "Not Detected" call for a specifically tested locus).
   ctDNA Tumor Fraction). Those have no per-variant change detail.
 - **NOT here:** histological findings, general lab markers, testing METHODS as names.
 
-## 2. One object per distinct variant
+## 2. Faithful per-mention extraction (no extractor-side dedup)
 
-- One `Genomic_Variants[]` entry per distinct variant. The same variant restated in two
-  places is still ONE object — do not duplicate. Two different variants in the same gene
-  are two objects.
-- `count_of_Genomic_Variants` MUST equal the length of `Genomic_Variants`.
+- Emit one `Genomic_Variants[]` entry **per MENTION you observe** in the source —
+  one entry per appearance of a variant. Do **NOT** collapse multiple mentions of
+  the "same" variant into one entry yourself. If KRAS p.G12D appears on page 1
+  with VAF 9.8% and again on page 6 with VAF 10%, emit **two** entries — one per
+  mention, each with its own `page_number` and verbatim values. Your job here is
+  RECALL; reconciliation is downstream.
+- Downstream the Linker's deterministic dedup policy
+  (`config/dedup_policy.yaml` → `Linker._apply_dedup_policy`) is responsible for:
+  (a) collapsing redundant mentions whose fields all agree,
+  (b) emitting a `variant_superseded_by` link when the same entity appears with
+      ANY field difference (the later-page mention wins by policy),
+  (c) resolving aliases via HGNC canonicalization (HER2 ↔ ERBB2 etc.).
+  Trust that layer — don't pre-empt it with your own judgment.
+- Two **different** variants in the same gene are two entries (unchanged).
+- `count_of_Genomic_Variants` MUST equal the length of `Genomic_Variants` you
+  emit (before downstream dedup runs).
 
 ## 3. Per-variant fields — EVERY field emitted, `null` when absent
 

@@ -36,6 +36,7 @@ from agents import (
     Extractor,
     ExtractorResult,
 )
+from core.errors import AgentError
 from core.observability import trace as otel_trace
 from core.prompt_renderer import PromptRenderer
 from core.schema_loader import SchemaLoader
@@ -180,20 +181,45 @@ class SectionTeam:
                 reason="Arbiter RE_EXTRACT but emitted no hints — flagging to SME.",
                 t0=t0,
             )
-        out.extractor_result_retry = await self._extractor.invoke(
-            state=state,
-            parser_hypothesis_count=len(candidates),
-            re_extract_hints=list(out.arbiter_result.re_extract_hints),
-        )
-        self._accumulate(out, out.extractor_result_retry)
-        return self._commit(
-            out, out.extractor_result_retry.output,
-            reason=(
-                f"Arbiter RE_EXTRACT with {len(out.arbiter_result.re_extract_hints)} "
-                f"hint(s); retry committed."
-            ),
-            t0=t0,
-        )
+        # R1: resilient retry. The retry extractor call CAN fail hard — most
+        # commonly with `AgentError("Extractor returned an empty final message")`
+        # when Gemini returns empty content twice in a row on the correction
+        # round-trip. Pre-R1 this crashed the entire pipeline run, throwing
+        # away the FIRST-PASS extraction (which was valid). The first pass is
+        # already committed on `out.extractor_result.output` — fall back to it
+        # so the pipeline continues. The downstream verifier + triage + VMAW
+        # path handles any remaining gaps. The auditor's hint set is preserved
+        # in the trace for future analysis.
+        try:
+            out.extractor_result_retry = await self._extractor.invoke(
+                state=state,
+                parser_hypothesis_count=len(candidates),
+                re_extract_hints=list(out.arbiter_result.re_extract_hints),
+            )
+            self._accumulate(out, out.extractor_result_retry)
+            return self._commit(
+                out, out.extractor_result_retry.output,
+                reason=(
+                    f"Arbiter RE_EXTRACT with {len(out.arbiter_result.re_extract_hints)} "
+                    f"hint(s); retry committed."
+                ),
+                t0=t0,
+            )
+        except AgentError as exc:  # noqa: BLE001 — degrade gracefully
+            logger.warning(
+                "SectionTeam[%s]: doc_id=%s retry-extractor failed (%s) — "
+                "falling back to FIRST-PASS extraction (R1 resilient retry). "
+                "Downstream verifier / triage / VMAW will handle remaining gaps.",
+                self._team_name, doc_id, exc,
+            )
+            return self._commit(
+                out, out.extractor_result.output,
+                reason=(
+                    f"Arbiter RE_EXTRACT with {len(out.arbiter_result.re_extract_hints)} "
+                    f"hint(s); retry failed ({exc}); FIRST-PASS retained (R1)."
+                ),
+                t0=t0,
+            )
 
     # -----------------------------------------------------------------------
     # Internals

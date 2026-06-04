@@ -1,24 +1,52 @@
-# Cross-section dedup policy — the canonical post-extraction reconciliation.
+# Dedup policy — the canonical post-extraction reconciliation.
 #
-# Design intent (architectural): extraction is recall-first. Teams + NER may
-# legitimately route the same entity to more than one section (e.g. JAK2 mentioned
-# as both a sequenced variant AND a gene on the panel). This file declares which
-# section OWNS each kind of entity. After assembly, `Linker._apply_dedup_policy`
-# drops the duplicate from the lower-priority section per the rules below.
+# Design intent (architectural): extraction is recall-first. The team prompts
+# emit one entry per MENTION; this file (executed by `Linker._apply_dedup_policy`)
+# is what collapses or reconciles those mentions.
 #
-# A rule has:
+# There are two kinds of rules:
+#
+# ── (A) CROSS-SECTION dedup (existing) ──────────────────────────────────────
+# When the same entity legitimately gets routed to two different sections (e.g.
+# JAK2 mentioned both as a sequenced variant AND as a gene on the panel), this
+# rule declares which section OWNS the entity and which section gets its copy
+# dropped.
 #   when_present_in : the OWNING section — when an entity exists here, it wins.
 #   drop_from       : the section to remove the duplicate from.
 #   match_on        : how to recognize "same entity." Options:
 #     gene_key      → HGNC-canonical match on each section's `gene_key_field`
 #                     (declared in section_layout.yaml). This catches HER2↔ERBB2
 #                     aliases automatically via the HGNC resolver.
-#     [optional add-ons in the future: + change_notation, + method, …]
 #   also_requires_filter_on_drop_from : optional dotted-path filter on the
 #                     drop_from record — only drop records that match this filter.
-#                     E.g. for v3 (where biomarkers can legitimately hold non-variant
-#                     IHC results), we only drop biomarker records that ARE variants
-#                     (i.e. carry `findings[*].variant_detail`).
+#
+# ── (B) INTRA-SECTION dedup (generic, field-agnostic) ───────────────────────
+# When the same entity appears multiple times INSIDE one section (e.g. KRAS p.G12D
+# restated on two pages with different VAF), this rule reconciles those entries
+# WITHOUT enumerating which fields can legitimately differ. The shape is:
+#   within_section          : the section whose array we walk.
+#   identity_keys           : list of fields that DEFINE "same entity" (e.g. for
+#                             variants: gene_key + amino_acid_change). Records
+#                             whose identity_keys match exactly (post-normalize)
+#                             are candidates for reconciliation.
+#   on_identical            : action when ALL non-identity fields agree across
+#                             the matching records. Options:
+#       keep_first_drop_rest → keep index 0, drop the rest from the array.
+#   on_any_field_conflict   : action when ANY non-identity field differs.
+#                             Options:
+#       link_supersession   → keep ALL matching records (audit trail), and add
+#                             a `variant_superseded_by` link from each
+#                             non-winner → winner. Winner picked by `winner`.
+#   winner                  : the rule for picking the authoritative record
+#                             when conflict resolution is `link_supersession`.
+#                             Options:
+#       higher_page_number  → record with the larger `page_number` wins
+#                             (universal "later mention is the amended one").
+#
+# This intra-section design is **field-agnostic by construction**: it never names
+# which fields can conflict. VAF, result, method, clinical_significance, allelic
+# state — any non-identity field difference triggers supersession. Adding the
+# same machinery to a new section is one YAML row, no Python.
 #
 # Adding a new dedup rule is one YAML row, no Python.
 
@@ -34,3 +62,38 @@ rules:
     # envelope without Genomic_Variant_umbrella never triggers this rule anyway
     # (the OWNING side is absent), so v3 is a no-op.
     also_requires_filter_on_drop_from: findings[*].variant_detail
+
+  # ── Intra-section: variants restated on multiple pages ──────────────────
+  # Same variant (same gene + same protein change) mentioned multiple times.
+  # Examples: KRAS p.G12D at 9.8% on a summary page and 10% on a detailed
+  # page, JAK2 V617F restated with different methods (NGS / PCR confirmation).
+  #
+  # IDENTITY KEYS: gene + amino_acid_change is the universal stable pair for
+  # protein-coding variants (the report usually states the protein change
+  # consistently across pages, even when other notations vary). We deliberately
+  # do NOT require `coding_dna_change` — many reports omit it on the summary
+  # page even while the detailed page carries it; requiring it would
+  # under-collapse. The rule is field-agnostic past identity — ANY non-identity
+  # field difference is treated as a conflict and reconciled by supersession.
+  - within_section: Genomic_Variant_umbrella
+    identity_keys:
+      - gene_key                  # HGNC-canonical gene (covers HER2↔ERBB2)
+      - amino_acid_change         # p.G12D == p.G12D
+    on_identical:
+      keep_first_drop_rest:       true
+    on_any_field_conflict:
+      link_supersession:          true
+      winner:                     higher_page_number
+
+  # ── Intra-section: biomarkers restated on multiple pages ───────────────
+  # Same biomarker (TMB, MSI, PD-L1, ER, …) appearing in a summary table and a
+  # detailed methodology/results section, possibly with different result values
+  # (12 vs 15 mut/Mb, MSI-High vs MSI-Stable, etc.). Same field-agnostic rule.
+  - within_section: other_molecular_biomarker_umbrella
+    identity_keys:
+      - biomarker_name            # post-canonicalization
+    on_identical:
+      keep_first_drop_rest:       true
+    on_any_field_conflict:
+      link_supersession:          true
+      winner:                     higher_page_number

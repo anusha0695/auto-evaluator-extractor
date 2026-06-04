@@ -99,6 +99,120 @@ def _section_record_array_field(name: str) -> str | None:
     return (_SECTION_LAYOUT.get(name) or {}).get("record_array")
 
 
+# Fields that record audit/trace state about extraction itself, not clinical
+# content. Two records that differ ONLY on these are still "identical mentions"
+# for intra-section dedup purposes — provenance entries point at the same source
+# even when array order differs.
+_AUDIT_FIELDS: frozenset[str] = frozenset({
+    "provenance", "needs_review", "review_reason", "occurrences",
+    "vmaw_confirmed", "vmaw_attribution_confirmed", "llm_confidence_score",
+    "hgvs_normalized",       # derived shadow; identity test should not rely on it
+})
+
+
+# HGVS notation prefixes — `p.` (protein), `c.` (coding DNA), `g.` (genomic),
+# `n.` (non-coding RNA), `r.` (RNA), `m.` (mitochondrial), `o.` (circular).
+# When two reports state the SAME amino-acid / DNA change with vs. without the
+# prefix (e.g. page 1 prints "G12D", page 6 prints "p.G12D"), they are
+# semantically identical — the prefix only names which layer of biology the
+# notation describes. Strip it during identity comparison.
+_HGVS_PREFIX_RE = re.compile(r"^[PCGNRMO]\.")
+
+
+def _canon_change(value: str) -> str:
+    """Canonicalize a change-notation string for identity comparison.
+
+    Generic and field-agnostic — applied to ALL string identity_keys (except
+    gene_key, which uses HGNC):
+      1. strip whitespace
+      2. uppercase
+      3. strip the leading HGVS notation prefix (p./c./g./n./r./m./o.)
+
+    Examples:
+        _canon_change("G12D")        → "G12D"
+        _canon_change("p.G12D")      → "G12D"
+        _canon_change("c.35G>A")     → "35G>A"
+        _canon_change("  P.V600E ")  → "V600E"
+
+    NOTE: this does NOT validate the change. A garbage string like
+    "p.HelloWorld" canonicalizes to "HELLOWORLD" — that's fine, dedup will only
+    collapse with another record that ALSO emitted "HelloWorld" / "p.HelloWorld".
+    Validation lives in the HGVS verifier; identity normalization is purely
+    surface-form alignment.
+    """
+    s = (value or "").strip().upper()
+    # Strip the leading p./c./g./… prefix if present.
+    s = _HGVS_PREFIX_RE.sub("", s)
+    return s
+
+
+def _records_fields_identical(
+    records: list[dict[str, Any]], indices: list[int], *, exclude: set[str],
+) -> bool:
+    """True iff the records at `indices` agree on EVERY non-excluded field.
+    Pure / no side effects. The exclude set is `identity_keys ∪ _AUDIT_FIELDS`
+    so that (a) identity fields don't double-count and (b) provenance/audit
+    differences don't masquerade as content disagreement.
+
+    Field-agnostic: we don't enumerate VAF / result / method / etc. — we just
+    diff all remaining keys."""
+    if len(indices) < 2:
+        return True
+    ref = records[indices[0]] if isinstance(records[indices[0]], dict) else {}
+    ref_keys = {k for k in ref if k not in exclude}
+    for i in indices[1:]:
+        other = records[i] if isinstance(records[i], dict) else {}
+        other_keys = {k for k in other if k not in exclude}
+        all_keys = ref_keys | other_keys
+        for k in all_keys:
+            if _norm_value(ref.get(k)) != _norm_value(other.get(k)):
+                return False
+    return True
+
+
+def _norm_value(v: Any) -> Any:
+    """Loose equality normalization for diffing record fields. Strings are
+    stripped+lowercased; None == empty string == []. Lists/dicts compared
+    recursively. Numbers compared by value."""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v.strip().lower()
+    if isinstance(v, list):
+        return [_norm_value(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _norm_value(x) for k, x in v.items()}
+    return v
+
+
+def _pick_winner(
+    records: list[dict[str, Any]], indices: list[int], policy: str,
+) -> int | None:
+    """Choose the winner index per `policy`. Returns None when no valid winner
+    can be chosen (e.g. policy unknown, or all candidates have null page_number).
+
+    Currently supported:
+      higher_page_number  — record with the largest `page_number` field wins.
+                             Ties resolved by earliest array index (stable).
+
+    Future policies (e.g. higher_vaf, marked_amended) plug in here without
+    touching the caller."""
+    valid = [i for i in indices if isinstance(records[i], dict)]
+    if not valid:
+        return None
+    pol = (policy or "").lower().strip()
+    if pol in ("higher_page_number", "higher_page", "later_page"):
+        def _page(i: int) -> int:
+            v = records[i].get("page_number")
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return -1
+        # max page; tie-break = smallest index for stability
+        return max(valid, key=lambda i: (_page(i), -i))
+    return None
+
+
 def _record_satisfies(record: Any, requires: str) -> bool:
     """True iff the dotted-path `requires` (e.g. `findings[*].variant_detail`) is
     truthy anywhere on `record`. `[*]` means "any element of this list." Used by the
@@ -454,11 +568,27 @@ class Linker:
             # which inspects addendum block text and only fires when an addendum
             # actually amends a finding.
             self_loop = (ltype.from_section == ltype.to_section)
+            # Self-typed (intra-section) link types — e.g. `variant_superseded_by`,
+            # `superseded_by` — are now OWNED by `_apply_intra_section_dedup`. Letting
+            # the gene-key seed emit them produces TWO problems that broke the KRAS
+            # / TP53 reconciliation:
+            #   (1) Bidirectional emission. The seed iterates all (i,j) pairs with
+            #       i != j, so for two KRAS records at indices 0 and 8 it emits
+            #       BOTH 0→8 AND 8→0. The production supersession filter then sees
+            #       both records on the `from_ref` side of a link → drops both →
+            #       KRAS disappears entirely from production.
+            #   (2) No winner policy. The seed has no way to know which mention is
+            #       the "amended" one — it has no page_number / addendum signal.
+            #       So even unidirectional emission would be a coin flip.
+            # The intra-section dedup mechanism resolves both: it picks ONE winner
+            # per identity group using a declared `winner` policy (currently
+            # higher_page_number) and emits a single directional link from each
+            # non-winner → winner. Skip self-typed types here and let it do the work.
+            if self_loop:
+                continue
             for i, gi in frm_recs:
                 for j, gj in to_recs:
                     if gi != gj:
-                        continue
-                    if self_loop and i == j:
                         continue
                     links.append(Link(
                         from_ref=f"{ltype.from_section}.{frm_arr}[{i}]",
@@ -500,18 +630,29 @@ class Linker:
     # -----------------------------------------------------------------------
 
     def _apply_dedup_policy(self, env: dict[str, Any], result: LinkResult) -> None:
-        """Drop cross-section duplicates per `config/dedup_policy.yaml`. For each rule
-        (when_present_in OWNS the entity; drop_from is the lower-priority section), we
-        HGNC-canonicalize the gene_key on both sides and remove records from drop_from
-        that match an owner. Optional `also_requires_filter_on_drop_from` narrows what
-        we drop (so v3 plain IHC biomarkers aren't touched by the variant rule).
+        """Apply dedup rules from `config/dedup_policy.yaml`. Two rule shapes:
 
-        Updates the section's count field if present. Records the dropped count on
-        `result.notes` for observability."""
+          (A) CROSS-SECTION   — rule has `when_present_in` + `drop_from`. The
+              owning section keeps the entity; the duplicate is removed from
+              the drop_from side. HGNC-canonical match.
+          (B) INTRA-SECTION   — rule has `within_section` + `identity_keys`
+              (+ `on_identical` / `on_any_field_conflict`). Generic, field-
+              agnostic: records with matching identity_keys are grouped; if
+              ALL other fields agree → keep first, drop rest; if ANY field
+              differs → emit a `variant_superseded_by` link from each non-
+              winner → winner (chosen by `winner` policy).
+
+        Dispatches each rule to its branch; the legacy cross-section branch
+        is unchanged so existing behavior + gates are preserved.
+        """
         if not _DEDUP_POLICY:
             return
         dropped_total = 0
         for rule in _DEDUP_POLICY:
+            # Branch (B): intra-section (new, generic).
+            if rule.get("within_section"):
+                self._apply_intra_section_dedup(env, rule, result)
+                continue
             owner_sec = rule.get("when_present_in")
             drop_sec = rule.get("drop_from")
             match = (rule.get("match_on") or "").lower()
@@ -558,6 +699,177 @@ class Linker:
             )
         if dropped_total:
             result.notes = (result.notes + f" | dedup -{dropped_total}").strip(" |")
+
+    # -----------------------------------------------------------------------
+    # INTRA-SECTION DEDUP — generic, field-agnostic, config-driven
+    # -----------------------------------------------------------------------
+
+    def _apply_intra_section_dedup(
+        self, env: dict[str, Any], rule: dict[str, Any], result: LinkResult,
+    ) -> None:
+        """Generic intra-section dedup. The rule shape:
+            within_section          : section name (envelope key)
+            identity_keys           : list of fields that DEFINE same-entity
+            on_identical            : { keep_first_drop_rest: true }
+            on_any_field_conflict   : { link_supersession: true,
+                                        winner: higher_page_number }
+
+        Algorithm:
+          1. Walk the section's record array (from section_layout.yaml or convention).
+          2. Group records by their `identity_keys` tuple. Records whose identity
+             can't be resolved (any identity_key missing/null) form singletons.
+          3. For each group of size > 1:
+             a. If ALL non-identity fields agree across the group → drop all but
+                the first record. Update the section's count.
+             b. Else (any field differs) → keep ALL records, and emit a
+                `variant_superseded_by` link from each non-winner → winner.
+                Winner picked per `winner` policy (currently: higher_page_number).
+                The downstream production filter (`transform/to_production.py`'s
+                `_apply_supersession_filter`) drops the non-winner from production.
+
+        NOTE: This method NEVER names which fields can conflict. VAF, result,
+        method, clinical_significance, allelic_state — any difference triggers
+        supersession. The mechanism is the same shape regardless of which field
+        differs. Adding a new section is one YAML row.
+        """
+        section = str(rule.get("within_section") or "")
+        identity_keys = list(rule.get("identity_keys") or [])
+        if not (section and identity_keys):
+            return
+        arr_field = _section_record_array_field(section)
+        if not arr_field:
+            return
+        section_obj = env.get(section) or {}
+        records = section_obj.get(arr_field) or []
+        if not isinstance(records, list) or len(records) < 2:
+            return
+
+        # ---- 2. group by identity tuple --------------------------------------
+        groups: dict[tuple, list[int]] = {}
+        for idx, rec in enumerate(records):
+            if not isinstance(rec, dict):
+                continue
+            key = self._identity_tuple(rec, identity_keys, section)
+            if key is None:
+                continue                              # unresolved identity → singleton
+            groups.setdefault(key, []).append(idx)
+
+        keep_first_drop_rest = bool(
+            (rule.get("on_identical") or {}).get("keep_first_drop_rest"))
+        conflict_cfg = rule.get("on_any_field_conflict") or {}
+        link_supersession = bool(conflict_cfg.get("link_supersession"))
+        winner_policy = str(conflict_cfg.get("winner") or "").strip()
+
+        drop_idxs: set[int] = set()
+
+        # ---- 3. process each duplicate group --------------------------------
+        for ident, idxs in groups.items():
+            if len(idxs) < 2:
+                continue
+            if _records_fields_identical(
+                    records, idxs, exclude=set(identity_keys) | _AUDIT_FIELDS):
+                # All non-identity fields agree → collapse to one record.
+                if keep_first_drop_rest:
+                    for i in idxs[1:]:
+                        drop_idxs.add(i)
+                        result.dedup_drops.append({
+                            "section": section,
+                            "ref": f"{section}.{arr_field}[{i}]",
+                            "rule": f"within_section {section}; on_identical=keep_first_drop_rest",
+                            "identity": dict(zip(identity_keys, ident)),
+                        })
+                continue
+            # Some field differs → supersession (links, all records kept).
+            if not link_supersession:
+                continue
+            winner_idx = _pick_winner(records, idxs, winner_policy)
+            if winner_idx is None:
+                continue
+            for i in idxs:
+                if i == winner_idx:
+                    continue
+                # Emit the supersession link. The production transform's
+                # _apply_supersession_filter handles dropping at output time.
+                result.links.append(Link(
+                    from_ref=f"{section}.{arr_field}[{i}]",
+                    to_ref=  f"{section}.{arr_field}[{winner_idx}]",
+                    type="variant_superseded_by",
+                    method="deterministic",
+                    confidence=1.0,
+                    rationale=(f"intra-section dedup ({section}): same entity "
+                               f"by {identity_keys}; winner by {winner_policy}"),
+                ))
+                result.supersession_events.append({
+                    "section": section,
+                    "from_ref": f"{section}.{arr_field}[{i}]",
+                    "to_ref":   f"{section}.{arr_field}[{winner_idx}]",
+                    "identity": dict(zip(identity_keys, ident)),
+                    "winner_policy": winner_policy,
+                    "resolved": True,
+                    "detail": f"emitted variant_superseded_by from [{i}] → [{winner_idx}]",
+                })
+
+        # ---- 4. apply drops + update count ----------------------------------
+        if drop_idxs:
+            kept = [r for i, r in enumerate(records) if i not in drop_idxs]
+            section_obj[arr_field] = kept
+            for k in list(section_obj):
+                if k.startswith("count_of_"):
+                    section_obj[k] = len(kept)
+            env[section] = section_obj
+            result.notes = (result.notes + f" | intra-dedup {section} -{len(drop_idxs)}").strip(" |")
+            logger.info(
+                "Linker.intra-dedup: section=%s dropped=%d (identical mentions collapsed)",
+                section, len(drop_idxs),
+            )
+
+    @staticmethod
+    def _identity_tuple(
+        record: dict[str, Any], identity_keys: list[str], section: str | None = None,
+    ) -> tuple | None:
+        """Build a hashable identity tuple from `identity_keys`. Returns None
+        when ANY identity field is missing/blank — those records become singletons
+        and never collapse with anything else.
+
+        Per-key normalization (generic, NOT field-specific):
+          • `gene_key`             → HGNC-canonicalized (same path as cross-section
+                                     dedup; collapses HER2↔ERBB2 etc.).
+          • any other string value → `_canon_change()`: strip + upper + strip
+                                     leading biomedical-notation prefix
+                                     (`p.` `c.` `g.` `n.` `r.` `m.` `o.`). So
+                                     `"G12D"` ≡ `"p.G12D"`, `"35G>A"` ≡ `"c.35G>A"`.
+                                     This is universally correct for these
+                                     fields (HGVS uses the prefix to declare
+                                     the layer of biology being described;
+                                     dropping it preserves the change identity
+                                     while ignoring surface variance).
+        """
+        out: list[Any] = []
+        for k in identity_keys:
+            if k == "gene_key" and section:
+                layout = _SECTION_LAYOUT.get(section) or {}
+                gkf = layout.get("gene_key_field")
+                raw = record if gkf == "*" else (record.get(gkf) if gkf else None)
+                # Canonicalize via the linker's HGNC resolver path.
+                canon = None
+                if raw:
+                    try:
+                        from preprocess.hgnc_resolver import HGNCResolver
+                        canon = HGNCResolver.canonical(str(raw))
+                    except Exception:  # noqa: BLE001 — fall back to raw upper
+                        canon = str(raw).strip().upper()
+                if not canon:
+                    return None
+                out.append(canon)
+            else:
+                v = record.get(k)
+                if v is None or (isinstance(v, str) and not v.strip()):
+                    return None
+                if isinstance(v, str):
+                    out.append(_canon_change(v))
+                else:
+                    out.append(v)
+        return tuple(out)
 
     # -----------------------------------------------------------------------
     # SUPERSESSION — deterministic detection on addendum blocks

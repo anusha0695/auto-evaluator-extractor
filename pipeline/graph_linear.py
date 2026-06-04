@@ -489,6 +489,15 @@ def _make_linker_node(*, linker: Linker, persistence: Any = None):
         )
         envelope, links, nrev = res.envelope, res.links, res.needs_review_refs
         links_dicts = [vars(l) if not isinstance(l, dict) else l for l in links]
+        # Attach links INTO the envelope as well as exposing them on state. This
+        # makes the envelope the single source of truth for cross-record
+        # relationships, which is what `transform/to_production.py` (the
+        # supersession filter `_apply_supersession_filter`) and the UI both read.
+        # Without this, extraction_v2.json + extraction_production.json would
+        # have no `links[]` field at all (since the linker's links live on
+        # `state["links"]` only) and downstream filters would silently no-op —
+        # even when the linker correctly emitted variant_superseded_by links.
+        envelope["links"] = list(links_dicts)
         # Persist the assembled envelope EVERY run (not only auto_accept) so the
         # UI / SME can review it regardless of verdict.
         if persistence is not None:
