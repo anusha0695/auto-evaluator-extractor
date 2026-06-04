@@ -237,18 +237,21 @@ class LinkBindingVerifier:
         all_text = " ".join(text_by_id.values()).lower()
 
         # Hallucination check — biomarker section only (variant section is HGVS-validated separately).
-        # S1: VERBATIM-FIRST. If the agent cited any source span (occurrences[].surface)
-        # that appears in source text, the record is NOT a hallucination — whatever
-        # we later canonicalized `biomarker_name` to. Only when neither the surfaces
-        # nor the canonical name appears anywhere in source do we flag refuted.
-        # Closes the false-positive class where canonicalization-vs-source mismatch
-        # (e.g. "MSI" vs source's "MICROSATELLITE INSTABILITY") tripped the check.
+        # S1 (revised): attach the record to source via ANY of three signals,
+        # because the v3 envelope carries `occurrences[].surface` while the
+        # v4 envelope carries `provenance[].block_id` and no surface field.
+        # Order of attachment (any one passes → not a hallucination):
+        #   1. occurrences[].surface ∈ source_text (verbatim surface match)
+        #   2. result-in-cited-block: the record's `result` (or any non-empty
+        #      verbatim leaf) appears in any block_id cited by provenance.
+        #      This catches the MSI case: agent cited block 52 in provenance,
+        #      block 52 contains "Not Detected" → attached.
+        #   3. canonical biomarker_name ∈ source_text (the legacy check).
+        # Only when ALL THREE fail do we flag refuted.
         biomarkers = (envelope.get("other_molecular_biomarker_umbrella") or {}).get(
             "other_molecular_biomarkers") or []
         for i, bm in enumerate(biomarkers):
-            # Collect surfaces from BOTH the biomarker-level occurrences (v3-shaped)
-            # and any findings-level occurrences (v4-shaped) — schemas differ on where
-            # the occurrence array lives, and this check has to work on both.
+            # --- (1) surface check (v3 envelopes) ---
             occs: list[dict[str, Any]] = []
             if isinstance(bm.get("occurrences"), list):
                 occs.extend(bm["occurrences"])
@@ -257,14 +260,45 @@ class LinkBindingVerifier:
                     occs.extend(f["occurrences"])
             surfaces = [str(o.get("surface") or "").strip().lower()
                         for o in occs if isinstance(o, dict)]
-            # Drop empty surfaces AND too-short ones (< 3 chars): a 1-2 char
-            # "surface" is almost always either noise or an artifact of an empty
-            # occurrence, and would falsely accept any record whose noise
-            # happens to appear somewhere in source. Real biomarker / variant
+            # min 3 chars filters out noise like "x" / "+" / "5" that would
+            # otherwise falsely ground any record. Real biomarker / variant
             # surfaces are >= 3 chars (MSI, BRCA1, V617F, JAK2, …).
             surfaces = [s for s in surfaces if len(s) >= 3]
             if surfaces and all_text and any(s in all_text for s in surfaces):
-                continue                              # verbatim surface present → attached
+                continue                              # surface present → attached
+
+            # --- (2) result-in-cited-block check (v4 envelopes) ---
+            # Collect every block_id the agent cited (provenance + occurrences).
+            cited_block_ids: set[str] = set()
+            for o in occs:
+                if isinstance(o, dict) and o.get("block_id"):
+                    cited_block_ids.add(str(o["block_id"]))
+            for p in (bm.get("provenance") or []):
+                if isinstance(p, dict) and p.get("block_id"):
+                    cited_block_ids.add(str(p["block_id"]))
+            # Gather candidate verbatim values to look for: result + interpretation
+            # + any findings result. We only flag a hallucination if NOTHING the
+            # record claims appears in ANY cited block — that is when the agent
+            # invented something.
+            verbatim_values: list[str] = []
+            for k in ("result", "interpretation"):
+                v = bm.get(k)
+                if isinstance(v, str) and len(v.strip()) >= 3:
+                    verbatim_values.append(v.strip().lower())
+            for f in (bm.get("findings") or []):
+                if isinstance(f, dict):
+                    for k in ("result", "interpretation"):
+                        v = f.get(k)
+                        if isinstance(v, str) and len(v.strip()) >= 3:
+                            verbatim_values.append(v.strip().lower())
+            cited_text = " ".join(
+                (text_by_id.get(bid) or "").lower()
+                for bid in cited_block_ids if bid in text_by_id
+            )
+            if cited_text and verbatim_values and any(v in cited_text for v in verbatim_values):
+                continue                              # the agent's claim is grounded in cited text
+
+            # --- (3) legacy canonical-name-in-source check ---
             name = (bm.get("biomarker_name") or "").lower()
             if name and all_text and name not in all_text:
                 out.append(Verdict(f"other_molecular_biomarkers[{i}]", "V3", "refuted",

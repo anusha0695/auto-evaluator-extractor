@@ -248,9 +248,16 @@ class VMAWAgent:
         # the only kind where "value already at ref" is meaningful to compare.
         # The T17 "never silently pick" rule below (cap == 'va') is preserved
         # for the actual-pick case where VMAW's value DIFFERS from the original.
+        #
+        # NB: NOT gated on self-reported `confidence`. `grounded` is the
+        # deterministic re-check (the value verbatim appears in the cited
+        # blocks); `value matches the original extraction` is independent
+        # confirmation; `contested=False` rules out source-conflict cases.
+        # Those three together are stronger than any LLM confidence number,
+        # and many VA hooks omit `confidence` entirely (defaulting to 0.0),
+        # which would otherwise make this branch unreachable.
         if (kind == "binding_refuted"
                 and grounded and not contested
-                and conf >= self._min_conf
                 and _matches_current_value(envelope, ref, value)):
             res.status = "auto_applied"
             res.rationale = ((res.rationale or "")
@@ -443,6 +450,18 @@ def _set(node: Any, key: Any, value: Any) -> None:
         pass
 
 
+_SECTION_PARENT = {
+    # The verifiers emit refs in the SECTION-RELATIVE shorthand
+    # ("other_molecular_biomarkers[1]"), but the envelope walk needs the
+    # full umbrella path ("other_molecular_biomarker_umbrella.other_molecular_biomarkers[1]").
+    # When a ref does not resolve at the envelope root, we retry under each of
+    # these umbrella prefixes to recover the absolute path.
+    "other_molecular_biomarkers": "other_molecular_biomarker_umbrella",
+    "Genomic_Variants":           "Genomic_Variant_umbrella",
+    "tested_biomarkers":          "tested_biomarker_umbrella",
+}
+
+
 def _matches_current_value(envelope: dict[str, Any], ref: str | None, vmaw_value: Any) -> bool:
     """S3: Does the VMAW-resolved value match what's already at `ref` in the envelope?
 
@@ -451,10 +470,15 @@ def _matches_current_value(envelope: dict[str, Any], ref: str | None, vmaw_value
     *pick* (different value → respect the T17 rule, route to SME).
 
     Comparison is normalized (whitespace-collapsed, lowercased) via `_norm`. For
-    finding-shaped refs that end at a record (not a scalar), we read the record's
-    `result` field — the field VMAW's VA capability adjudicates for biomarkers.
-    Returns False on any walk error or when types don't match: failing-closed
-    is correct (treat as "not a confirmation" → fall through to the SME path).
+    refs that land on a record dict, we read the record's `result` field — the
+    field VMAW's VA capability adjudicates for biomarkers. Returns False on any
+    walk error: failing-closed is correct (treat as "not a confirmation" →
+    fall through to the SME path).
+
+    Handles BOTH absolute refs ("other_molecular_biomarker_umbrella.other_molecular_biomarkers[1]")
+    and the section-relative shorthand the verifiers emit
+    ("other_molecular_biomarkers[1]") — the latter is the actual format in the
+    escalation queue today, so this fallback is required for S3 to ever fire.
     """
     if not ref or vmaw_value is None:
         return False
@@ -462,12 +486,18 @@ def _matches_current_value(envelope: dict[str, Any], ref: str | None, vmaw_value
         parent, last = _resolve_parent(envelope, ref)
     except Exception:  # noqa: BLE001 — pure-data walk, never raise
         return False
+    # Section-relative fallback when the absolute walk missed.
+    if parent is None:
+        head = str(ref).split(".")[0].split("[")[0]
+        umbrella = _SECTION_PARENT.get(head)
+        if umbrella:
+            try:
+                parent, last = _resolve_parent(envelope, f"{umbrella}.{ref}")
+            except Exception:  # noqa: BLE001
+                return False
     if parent is None:
         return False
     current = _get(parent, last)
-    # If `ref` lands on a record (dict), the VMAW value almost certainly maps
-    # to its `result` field for binding_refuted findings. Fall back to direct
-    # equality for scalar refs.
     if isinstance(current, dict):
         current = current.get("result")
     if current is None:
