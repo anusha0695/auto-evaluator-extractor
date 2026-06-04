@@ -153,11 +153,50 @@ def main() -> int:
     check("V4 refuted → link_cannot_form (link defect)", "link_cannot_form" in gt)
     check("V2 refuted → item-level binding_refuted (targeted ref)",
           any(d.defect_type == "binding_refuted" and (d.target_ref or "").startswith("other_molecular") for d in gd))
+    check("S2: defect carries the V-check that produced it",
+          any(d.defect_type == "binding_refuted" and d.check == "V2" for d in gd),
+          str([(d.defect_type, d.check) for d in gd]))
     check("uncertain binding item → binding_uncertain", "binding_uncertain" in gt)
     gdec = TriageAgent().decide(gap_state)
     gacts = {r["defect_type"]: r["action"] for r in gdec.repair_requests}
     check("block_misroute → reprofile_block", gacts.get("block_misroute") == "reprofile_block", str(gacts))
     check("link_cannot_form → re_link (team-less action not escalated)", gacts.get("link_cannot_form") == "re_link")
+    check("S2: V1/V2 binding_refuted → re_extract_team (re-extract CAN help)",
+          gacts.get("binding_refuted") == "re_extract_team", str(gacts))
+
+    # S2 — V3 binding_refuted must SKIP repair and go straight to escalate (→ VMAW).
+    # Re-extract can't fix a canonicalization-vs-source mismatch.
+    v3_state = {
+        "doc_id": "t", "active_team_keys": ["molecular_biomarker_team"],
+        "verifier_scorecards": [], "extraction": {},
+        "binding_items": [
+            {"ref": "other_molecular_biomarker_umbrella.other_molecular_biomarkers[1]",
+             "check": "V3", "verdict": "refuted",
+             "evidence": "biomarker 'msi' not present in any source block (possible hallucination)"},
+            {"ref": "other_molecular_biomarker_umbrella.other_molecular_biomarkers[2].findings[0]",
+             "check": "V1", "verdict": "refuted",
+             "evidence": "result 'Detected' / name 'EGFR' not found in cited block"},
+        ],
+        "binding_verifier": {"refuted": 2, "uncertain": 0},
+    }
+    v3_defects = build_defects(v3_state)
+    v3_def = next((d for d in v3_defects if d.check == "V3"), None)
+    v1_def = next((d for d in v3_defects if d.check == "V1"), None)
+    check("S2: V3 defect built with check='V3'", v3_def is not None and v3_def.check == "V3")
+    check("S2: V1 defect built with check='V1'", v1_def is not None and v1_def.check == "V1")
+    v3_dec = TriageAgent().decide(v3_state)
+    v3_escs = [e for e in v3_dec.escalations if "V3" in (e.get("reason") or "")]
+    check("S2: V3 binding_refuted goes to ESCALATE (not repair)",
+          len(v3_escs) == 1 and "synonym" in v3_escs[0].get("reason", "").lower(),
+          str(v3_dec.escalations))
+    check("S2: V3 binding_refuted has NO repair_request",
+          not any(r.get("defect_type") == "binding_refuted" and "msi" in str(r.get("detail","")).lower()
+                  for r in v3_dec.repair_requests),
+          str(v3_dec.repair_requests))
+    v1_reqs = [r for r in v3_dec.repair_requests if r.get("defect_type") == "binding_refuted"]
+    check("S2: V1 binding_refuted DOES get a re_extract_team repair_request",
+          any(r.get("action") == "re_extract_team" for r in v1_reqs),
+          str(v1_reqs))
 
     print("[1d] gap #6/#7: triage agent router — escalate-when-unfixable + team assignment")
     # (a) a schema_error whose loc section doesn't map to any team → team None
@@ -228,10 +267,34 @@ def main() -> int:
     check("per-team cap reached → that team's recall miss escalates",
           not any(r["team"] == "specimen_findings_team" and r["defect_type"] == "recall_miss_present"
                   for r in d3.repair_requests))
+    # S4: the per-run global call-budget was removed (call counter could starve
+    # later defects when earlier defects consumed the pool — e.g. MSI escalated
+    # "global repair budget exhausted" while its team had not even tried). Cost
+    # is now bounded structurally by per_team_cap × n_teams + the recur-guard.
+    # Lock that policy by showing a high legacy `repair_budget_used` does NOT
+    # affect routing: a fresh defect for a team that has not used its slot
+    # still gets its repair request.
     st_gc = _state_with_defects()
-    st_gc["repair_budget_used"] = len(st_gc["active_team_keys"]) * 2   # global cap = teams×2
+    st_gc["repair_budget_used"] = 999   # legacy field — must be ignored by triage now
     d4 = agent.decide(st_gc)
-    check("global budget exhausted → no repair requests", d4.repair_requests == [], str(d4.repair_requests))
+    check("S4: high legacy budget_used does NOT block fresh defects (no global cap)",
+          any(r for r in d4.repair_requests),
+          str(d4.repair_requests))
+    # The structural cost bound IS the per-team cap (1 re-extract per team per RUN).
+    # Once a team has re-extracted (i.e. it's in repair_log), it can't get another.
+    st_cap_run = _state_with_defects()
+    st_cap_run["repair_budget_used"] = 999
+    st_cap_run["repair_log"] = [
+        {"action": "re_extract_team", "team": t}
+        for t in (st_cap_run.get("active_team_keys") or [])
+    ]
+    d5 = agent.decide(st_cap_run)
+    check("S4: per-team cap (set via repair_log) prevents any new re-extract",
+          not any(r.get("action") == "re_extract_team" for r in d5.repair_requests),
+          str(d5.repair_requests))
+    check("S4: defects whose teams maxed out get escalated with per-team-cap reason",
+          any("per-team repair cap" in e.get("reason", "") for e in d5.escalations),
+          str(d5.escalations))
 
     print("[4] RepairExecutor applies the catalog")
     repaired_out = {"other_molecular_biomarkers": [

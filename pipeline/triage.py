@@ -59,6 +59,15 @@ class Defect:
     # meaningful link types (supersession) from being silently dropped under the
     # `_DROPPABLE_ON_UNRESOLVED` rule.
     link_type: str | None = None
+    # For binding/link defects (S2): the underlying verifier check that produced
+    # this defect — one of V1|V2|V3|V4. The umbrella defect_type "binding_refuted"
+    # covers V1/V2/V3, but the right repair differs by check:
+    #   V1/V2 → re_extract_team (agent picked weak evidence; a fresh extraction
+    #           with a hint may fix it)
+    #   V3    → escalate-only / VMAW (re-extract can't fix a canonicalization-vs-
+    #           source mismatch; the canonical form IS the right answer — let
+    #           VMAW's CITE capability ground it via the source surface instead)
+    check: str | None = None
 
     @property
     def signature(self) -> str:
@@ -330,11 +339,14 @@ def build_defects(state: dict[str, Any]) -> list[Defect]:
                 # Resolve the link's registry type so VMAW's autonomy gate can
                 # protect supersession-class links from the silent-drop path.
                 ltype = _resolve_link_type(state, ref) if is_link else None
+                # S2: carry the underlying verifier check (V1|V2|V3|V4) so the
+                # router can distinguish flavors of binding_refuted.
+                check_id = str(it.get("check") or "").strip().upper() or None
                 defects.append(Defect(
                     defect_type="link_cannot_form" if is_link else "binding_refuted",
                     section=section, team=_SECTION_TEAM.get(section), target_ref=ref,
                     detail=str(it.get("evidence") or "bind not supported")[:200],
-                    content_signature=content_sig, link_type=ltype))
+                    content_signature=content_sig, link_type=ltype, check=check_id))
             elif verdict == "uncertain":
                 defects.append(Defect(
                     defect_type="binding_uncertain", section=section, team=None,
@@ -393,8 +405,10 @@ class TriageAgent:
     def decide(self, state: dict[str, Any]) -> TriageDecision:
         defects = build_defects(state)
         seen = set(state.get("defect_signatures_seen") or [])
-        budget_used = int(state.get("repair_budget_used", 0) or 0)
-        global_cap = self._global_cap(state)
+        # S4: the per-run global call-budget was removed. We still read
+        # `repair_budget_used` only for the legacy backward-compat path of
+        # cycle-numbering inside repair_log entries; the deciding policy no
+        # longer consults it.
         # per-team repairs already executed (from the repair ledger).
         per_team_done: dict[str, int] = {}
         for e in (state.get("repair_log") or []):
@@ -415,6 +429,18 @@ class TriageAgent:
 
             if d.defect_type in _ESCALATE_ONLY:
                 esc("needs human judgment (taxonomy)")
+                continue
+            # S2: V3 binding_refuted (name-not-found / hallucination check) →
+            # escalate straight to VMAW. Re-extracting can't fix a canonicalization-
+            # vs-source mismatch: the agent already emitted the canonical form
+            # (e.g. "MSI" from source "MICROSATELLITE INSTABILITY") which is the
+            # right answer. VMAW's CITE capability is the right tool — it grounds
+            # via the source surface rather than the canonical name. V1/V2
+            # binding_refuted is handled by the deterministic _ADDRESSABLE map
+            # below (re_extract_team) — re-extract CAN fix those (agent picked
+            # weak evidence; a hinted re-extract may land better).
+            if d.defect_type == "binding_refuted" and d.check == "V3":
+                esc("V3 hallucination — re-extract can't fix synonym/canonicalization gap; route to VMAW (CITE)")
                 continue
             action = _ADDRESSABLE.get(d.defect_type)
             if action is None:
@@ -454,14 +480,17 @@ class TriageAgent:
             if per_team_done.get(d.team, 0) >= self._per_team_cap:
                 esc(f"per-team repair cap ({self._per_team_cap}) reached for {d.team}")
                 continue
-            # global cap (count already-used + pending in this cycle). Deterministic
-            # actions (renormalize_field) are exempt — they have a natural stopping
-            # condition and cost no LLM calls, so the budget shouldn't starve them.
-            if action not in _DETERMINISTIC:
-                non_det_pending = sum(1 for r in requests if r.get("action") not in _DETERMINISTIC)
-                if budget_used + non_det_pending >= global_cap:
-                    esc(f"global repair budget ({global_cap}) exhausted")
-                    continue
+            # S4: the per-run global call-budget was REMOVED. The previous cap
+            # (n_active_teams × factor) could starve later defects when earlier
+            # defects consumed the pool before the loop ever reached them
+            # (e.g. the MSI biomarker escalating with "global repair budget
+            # exhausted" while the biomarker team had not even tried). Cost is
+            # already bounded structurally:
+            #   • per_team_cap = 1 → at most n_teams re-extracts ever (4 for v4)
+            #   • recur-guard escalates the same signature on repeat → bounds
+            #     re_link / reprofile_block / renormalize from looping
+            #   • GRAPH_RECURSION_LIMIT (graph_selfcorrecting) is the outermost
+            #     bound on total triage→repair→verifier cycles
             requests.append({
                 "action": action, "team": d.team, "section": d.section,
                 "target_ref": d.target_ref, "defect_type": d.defect_type,

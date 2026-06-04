@@ -97,6 +97,40 @@ def main() -> int:
           v.get(("other_molecular_biomarkers[2]", "V3")) == "refuted",
           str([x for x in res.verdicts if x.check == "V3"]))
 
+    print("S1 — verbatim-surface-first V1+V3 (the MSI case)")
+    print("    Extractor canonicalized 'MICROSATELLITE INSTABILITY' to 'MSI' and cited")
+    print("    block 52 with surface = the original long-form. Substring match on the")
+    print("    canonical name misses, but surface-in-source matches → NOT a hallucination.")
+    blocks_s1 = [{"block_id": "52", "text": "MICROSATELLITE INSTABILITY: Not Detected"}]
+    env_s1 = {"other_molecular_biomarker_umbrella": {"other_molecular_biomarkers": [
+        {"biomarker_name": "MSI",            # canonicalized
+         "findings": [{"method": "PCR", "result": "Not Detected",
+                       "occurrences": [{"block_id": "52",
+                                        "surface": "MICROSATELLITE INSTABILITY"}]}]}]}}
+    res_s1 = LinkBindingVerifier().verify(envelope=env_s1, links=[], blocks=blocks_s1)
+    by_ref = {(x.ref, x.check): x for x in res_s1.verdicts}
+    v1 = by_ref.get(("other_molecular_biomarkers[0].findings[0]", "V1"))
+    v3 = by_ref.get(("other_molecular_biomarkers[0]", "V3"))
+    check("S1: V1 confirmed (surface 'MICROSATELLITE INSTABILITY' is in block 52)",
+          v1 is not None and v1.verdict == "confirmed",
+          str(v1))
+    check("S1: V3 does NOT refute (verbatim surface present → not a hallucination)",
+          v3 is None or v3.verdict != "refuted",
+          str(v3))
+
+    print("S1 — V3 still refutes a real hallucination (no surface match + name absent)")
+    # Negative control: empty surface AND canonical name doesn't appear → refute.
+    env_neg = {"other_molecular_biomarker_umbrella": {"other_molecular_biomarkers": [
+        {"biomarker_name": "MADEUPNAME", "findings": [
+            {"method": "IHC", "result": "+",
+             "occurrences": [{"block_id": "52", "surface": ""}]}]}]}}
+    res_neg = LinkBindingVerifier().verify(envelope=env_neg, links=[], blocks=blocks_s1)
+    v3_neg = next((x for x in res_neg.verdicts
+                   if x.check == "V3" and x.ref == "other_molecular_biomarkers[0]"), None)
+    check("S1: real hallucination (no surface match + name not in source) still refuted",
+          v3_neg is not None and v3_neg.verdict == "refuted",
+          str(v3_neg))
+
     print("-" * 60)
     if fails:
         print(f"M6 VERIFY: FAIL ({len(fails)}): {fails}")

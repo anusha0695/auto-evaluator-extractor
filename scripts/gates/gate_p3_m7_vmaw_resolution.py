@@ -242,6 +242,60 @@ def main() -> int:
     check("link removed from envelope",
           not out_ref["extraction"].get("links"), str(out_ref["extraction"].get("links")))
 
+    print("[9] S3 — VMAW confirmation auto-accept (binding_refuted where VMAW's")
+    print("    grounded value MATCHES the original extraction → no SME, no review_light)")
+    # The MSI case from full_report_Redacted: extractor wrote 'MSI' / 'Not Detected'
+    # citing block 52; V3 hallucination check refuted because 'msi' isn't in source
+    # text literally; VMAW's VA grounded "Not Detected" at block 52 (same answer).
+    # Pre-S3 this surfaced as review_light (queue, status=proposed_for_sme).
+    # Post-S3 it auto-applies → item LEAVES the queue entirely.
+    def _va_confirm(*args, **kwargs):
+        return {"value": "Not Detected", "block_ids": ["52"],
+                "rationale": "block 52 says MICROSATELLITE INSTABILITY: Not Detected",
+                "confidence": 0.95, "contested": False}
+    confirm_env = {"other_molecular_biomarker_umbrella": {"other_molecular_biomarkers": [
+        {"biomarker_name": "MSI", "result": "Not Detected", "method": "PCR"}]}}
+    confirm_blocks = [{"block_id": "52", "text": "MICROSATELLITE INSTABILITY: Not Detected"}]
+    confirm_item = {"kind": "binding_refuted",
+                    "ref": "other_molecular_biomarker_umbrella.other_molecular_biomarkers[0]",
+                    "section": "other_molecular_biomarker_umbrella",
+                    "detail": "biomarker 'msi' not present in any source block"}
+    out_conf = VMAWAgent(adjudicate_value_fn=_va_confirm).resolve({
+        "extraction": confirm_env, "escalation_queue": [confirm_item],
+        "doc_profile": {"blocks": confirm_blocks}})
+    check("S3 confirm: item left the queue (no SME workload)",
+          out_conf["escalation_queue"] == [],
+          str(out_conf["escalation_queue"]))
+    # vmaw_resolutions carries the auto_applied audit record.
+    autos = [r for r in (out_conf.get("vmaw_resolutions") or [])
+             if r.get("status") == "auto_applied"]
+    check("S3 confirm: vmaw_resolutions has exactly one auto_applied record",
+          len(autos) == 1,
+          str(out_conf.get("vmaw_resolutions")))
+    check("S3 confirm: rationale includes 'vmaw_confirmation' (audit trail)",
+          autos and "vmaw_confirmation" in str(autos[0].get("rationale") or ""),
+          str(autos[0].get("rationale") if autos else None))
+
+    print("[10] S3 — VMAW *pick* (different value) STILL routes to SME (T17 preserved)")
+    # When VMAW's value DIFFERS from what's already in the envelope, this is a
+    # genuine adjudication — the conservative T17 rule must still fire.
+    def _va_pick(*args, **kwargs):
+        return {"value": "Detected", "block_ids": ["52"],          # ← DIFFERENT
+                "rationale": "block 52 actually says Detected", "confidence": 0.92,
+                "contested": False}
+    out_pick = VMAWAgent(adjudicate_value_fn=_va_pick).resolve({
+        "extraction": confirm_env, "escalation_queue": [confirm_item],
+        "doc_profile": {"blocks": confirm_blocks}})
+    pick_resolutions = [r for r in (out_pick.get("vmaw_resolutions") or [])
+                        if r.get("status") == "proposed_for_sme"]
+    check("S3 pick: vmaw_resolutions records proposed_for_sme (T17 fires)",
+          len(pick_resolutions) == 1,
+          str(out_pick.get("vmaw_resolutions")))
+    check("S3 pick: item REMAINS in queue with vmaw_proposal for SME",
+          len(out_pick["escalation_queue"]) == 1 and
+          out_pick["escalation_queue"][0].get("vmaw_proposal") is not None,
+          str(out_pick["escalation_queue"]))
+
     print("-" * 60)
     if fails:
         print(f"P3-M7 VERIFY: FAIL ({len(fails)}): {fails}")

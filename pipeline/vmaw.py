@@ -240,6 +240,23 @@ class VMAWAgent:
                 and str(out.get("rationale") or "").strip()):
             res.status = "vmaw_refuted"
             return res
+        # S3: VMAW *confirmation*. If VMAW's resolved value matches what the
+        # extractor already wrote at this ref (normalized equality), VMAW is
+        # corroborating the extraction, not adjudicating between alternatives.
+        # Auto-apply with a `vmaw_confirmation` rationale instead of routing to
+        # SME for a redundant one-click approve. Scoped to binding_refuted —
+        # the only kind where "value already at ref" is meaningful to compare.
+        # The T17 "never silently pick" rule below (cap == 'va') is preserved
+        # for the actual-pick case where VMAW's value DIFFERS from the original.
+        if (kind == "binding_refuted"
+                and grounded and not contested
+                and conf >= self._min_conf
+                and _matches_current_value(envelope, ref, value)):
+            res.status = "auto_applied"
+            res.rationale = ((res.rationale or "")
+                + (" | " if res.rationale else "")
+                + "vmaw_confirmation: value matches original extraction").strip(" |")
+            return res
         # Contested adjudication → never silently pick (T17) → SME ratify.
         if contested or cap == "va":
             res.status = "proposed_for_sme"
@@ -424,6 +441,38 @@ def _set(node: Any, key: Any, value: Any) -> None:
         node[key] = value
     except (KeyError, IndexError, TypeError):
         pass
+
+
+def _matches_current_value(envelope: dict[str, Any], ref: str | None, vmaw_value: Any) -> bool:
+    """S3: Does the VMAW-resolved value match what's already at `ref` in the envelope?
+
+    The autonomy decision uses this to distinguish a VMAW *confirmation* (same
+    value as the original extraction → auto-apply, no SME needed) from a VMAW
+    *pick* (different value → respect the T17 rule, route to SME).
+
+    Comparison is normalized (whitespace-collapsed, lowercased) via `_norm`. For
+    finding-shaped refs that end at a record (not a scalar), we read the record's
+    `result` field — the field VMAW's VA capability adjudicates for biomarkers.
+    Returns False on any walk error or when types don't match: failing-closed
+    is correct (treat as "not a confirmation" → fall through to the SME path).
+    """
+    if not ref or vmaw_value is None:
+        return False
+    try:
+        parent, last = _resolve_parent(envelope, ref)
+    except Exception:  # noqa: BLE001 — pure-data walk, never raise
+        return False
+    if parent is None:
+        return False
+    current = _get(parent, last)
+    # If `ref` lands on a record (dict), the VMAW value almost certainly maps
+    # to its `result` field for binding_refuted findings. Fall back to direct
+    # equality for scalar refs.
+    if isinstance(current, dict):
+        current = current.get("result")
+    if current is None:
+        return False
+    return _norm(current) == _norm(vmaw_value)
 
 
 def make_vmaw_node(*, agent: VMAWAgent | None = None):

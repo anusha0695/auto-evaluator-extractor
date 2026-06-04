@@ -138,8 +138,36 @@ class LinkBindingVerifier:
 
     @staticmethod
     def _grounded(name: str, result: Any, occurrences: list[dict], text_by_id: dict) -> bool:
+        """V1 grounding — VERBATIM-FIRST (S1).
+
+        Rule order:
+          1. If any occurrence's `surface` (the exact string the agent quoted from
+             source) appears in its cited block's text, the record is grounded —
+             whatever we later canonicalized `biomarker_name` to. This is the
+             primary check: the agent told us where it read the value AND what
+             it read; matching that verbatim is the strongest possible proof.
+          2. Fallback to the EMITTED `name`/`result` strings against block text
+             + surface, for the case where the agent emitted no usable surface
+             (older runs, table-cell occurrences) but the canonical strings
+             happen to literally appear in source.
+
+        Without rule (1), records whose `biomarker_name` was canonicalized
+        (e.g. "MSI" extracted from "MICROSATELLITE INSTABILITY") would be
+        marked refuted even when the agent explicitly cited the right block
+        with the right surface — a false-positive class that burns the repair
+        budget and floods the SME queue.
+        """
         if not occurrences:
             return False
+        # (1) Verbatim surface present in cited block → grounded.
+        # Require min 3 chars on surface — see V3 rationale (1-2 char surfaces
+        # are noise and would falsely ground any record).
+        for o in occurrences:
+            txt = (text_by_id.get(o.get("block_id")) or "").lower()
+            surface = (o.get("surface") or "").strip().lower()
+            if surface and len(surface) >= 3 and txt and surface in txt:
+                return True
+        # (2) Legacy fallback: emitted name/result in cited block text or surface.
         needle_result = (str(result).lower() if result is not None else None)
         for o in occurrences:
             txt = (text_by_id.get(o.get("block_id")) or "").lower()
@@ -209,9 +237,34 @@ class LinkBindingVerifier:
         all_text = " ".join(text_by_id.values()).lower()
 
         # Hallucination check — biomarker section only (variant section is HGVS-validated separately).
+        # S1: VERBATIM-FIRST. If the agent cited any source span (occurrences[].surface)
+        # that appears in source text, the record is NOT a hallucination — whatever
+        # we later canonicalized `biomarker_name` to. Only when neither the surfaces
+        # nor the canonical name appears anywhere in source do we flag refuted.
+        # Closes the false-positive class where canonicalization-vs-source mismatch
+        # (e.g. "MSI" vs source's "MICROSATELLITE INSTABILITY") tripped the check.
         biomarkers = (envelope.get("other_molecular_biomarker_umbrella") or {}).get(
             "other_molecular_biomarkers") or []
         for i, bm in enumerate(biomarkers):
+            # Collect surfaces from BOTH the biomarker-level occurrences (v3-shaped)
+            # and any findings-level occurrences (v4-shaped) — schemas differ on where
+            # the occurrence array lives, and this check has to work on both.
+            occs: list[dict[str, Any]] = []
+            if isinstance(bm.get("occurrences"), list):
+                occs.extend(bm["occurrences"])
+            for f in (bm.get("findings") or []):
+                if isinstance(f, dict) and isinstance(f.get("occurrences"), list):
+                    occs.extend(f["occurrences"])
+            surfaces = [str(o.get("surface") or "").strip().lower()
+                        for o in occs if isinstance(o, dict)]
+            # Drop empty surfaces AND too-short ones (< 3 chars): a 1-2 char
+            # "surface" is almost always either noise or an artifact of an empty
+            # occurrence, and would falsely accept any record whose noise
+            # happens to appear somewhere in source. Real biomarker / variant
+            # surfaces are >= 3 chars (MSI, BRCA1, V617F, JAK2, …).
+            surfaces = [s for s in surfaces if len(s) >= 3]
+            if surfaces and all_text and any(s in all_text for s in surfaces):
+                continue                              # verbatim surface present → attached
             name = (bm.get("biomarker_name") or "").lower()
             if name and all_text and name not in all_text:
                 out.append(Verdict(f"other_molecular_biomarkers[{i}]", "V3", "refuted",
