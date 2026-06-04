@@ -342,8 +342,14 @@
         const prov = provMap[field] || {};
         selectedField = { field, prov, value: variant[field] };
         renderFieldDetail(selectedField);
-        if (prov.block_id && DOCS[currentDocIdx].hasPdf) {
-          window.pdfViewer.highlightBlock(prov.block_id, prov.page || null);
+        if (DOCS[currentDocIdx].hasPdf && prov.block_id) {
+          // If block_id uses 'block_N' format, do text-based search instead
+          if (String(prov.block_id).startsWith('block_')) {
+            const searchVal = String(variant[field] || variant.gene_studied || '');
+            window.pdfViewer.highlightByText(searchVal, prov.page || null);
+          } else {
+            window.pdfViewer.highlightBlock(prov.block_id, prov.page || null);
+          }
           switchRightTab('pdfPane');
         }
       });
@@ -434,8 +440,12 @@
         const prov = provMap[field] || {};
         selectedField = { field, prov, value: bm[field] };
         renderFieldDetail(selectedField);
-        if (prov.block_id && DOCS[currentDocIdx].hasPdf) {
-          window.pdfViewer.highlightBlock(prov.block_id, prov.page || null);
+        if (DOCS[currentDocIdx].hasPdf && prov.block_id) {
+          if (String(prov.block_id).startsWith('block_')) {
+            window.pdfViewer.highlightByText(String(bm[field] || bm.biomarker_name || ''), prov.page || null);
+          } else {
+            window.pdfViewer.highlightBlock(prov.block_id, prov.page || null);
+          }
           switchRightTab('pdfPane');
         }
       });
@@ -507,15 +517,38 @@
       btn.addEventListener('mouseleave', () => { btn.style.borderColor = 'var(--g200)'; btn.style.color = 'var(--g700)'; btn.style.background = 'var(--white)'; });
     });
 
+    // Helper: search loaded blocks for text and return provenance-like object
+    function findBlockProv(searchText, preferPage) {
+      if (!searchText || !blocks.length) return { type: 'derived', page: preferPage || null };
+      const needle = String(searchText).toLowerCase().trim();
+      let best = null;
+      for (const b of blocks) {
+        const t = (b.text || '').toLowerCase();
+        if (t.includes(needle)) {
+          if (preferPage && Number(b.page_number) === Number(preferPage)) { best = b; break; }
+          if (!best) best = b;
+        }
+      }
+      if (best) {
+        return { type: 'linked', block_id: best.block_id, page: Number(best.page_number), text: best.text };
+      }
+      return { type: 'derived', page: preferPage || null };
+    }
+
     // Wire chip clicks to show traceability + navigate PDF
     container.querySelectorAll('.tested-chip').forEach(chip => {
       chip.style.cursor = 'pointer';
       chip.addEventListener('click', () => {
         const name = chip.dataset.biomarker;
-        selectedField = { field: name, prov: { type: 'derived', page: pages[0] || null }, value: name };
+        const prov = findBlockProv(name, pages[0] || null);
+        selectedField = { field: name, prov, value: name };
         renderFieldDetail(selectedField);
-        if (pages.length > 0 && DOCS[currentDocIdx].hasPdf) {
-          window.pdfViewer.highlightBlock(null, pages[0]);
+        if (DOCS[currentDocIdx].hasPdf) {
+          if (prov.block_id) {
+            window.pdfViewer.highlightBlock(prov.block_id, prov.page);
+          } else {
+            window.pdfViewer.highlightByText(name, pages[0] || null);
+          }
           switchRightTab('pdfPane');
         }
       });
@@ -528,10 +561,18 @@
         if (e.target.tagName === 'BUTTON') return;
         const field = reviewFields[fi];
         const val = section[field];
-        selectedField = { field, prov: { type: 'derived', page: pages[0] || null }, value: Array.isArray(val) ? val.join(', ') : val };
+        const displayVal = Array.isArray(val) ? val.join(', ') : val;
+        // For the tested_biomarkers list field, search for the first biomarker
+        const searchText = field === 'tested_biomarkers' && biomarkers.length > 0 ? biomarkers[0] : String(displayVal || '');
+        const prov = findBlockProv(searchText, pages[0] || null);
+        selectedField = { field, prov, value: displayVal };
         renderFieldDetail(selectedField);
-        if (pages.length > 0 && DOCS[currentDocIdx].hasPdf) {
-          window.pdfViewer.highlightBlock(null, pages[0]);
+        if (DOCS[currentDocIdx].hasPdf) {
+          if (prov.block_id) {
+            window.pdfViewer.highlightBlock(prov.block_id, prov.page);
+          } else {
+            window.pdfViewer.highlightByText(searchText, pages[0] || null);
+          }
           switchRightTab('pdfPane');
         }
       });
@@ -578,7 +619,11 @@
     selectedField = { field: fieldName, prov, value };
     renderFieldDetail(selectedField);
     if (prov && prov.block_id && DOCS[currentDocIdx].hasPdf) {
-      window.pdfViewer.highlightBlock(prov.block_id, prov.page || null);
+      if (String(prov.block_id).startsWith('block_')) {
+        window.pdfViewer.highlightByText(String(value || fieldName || ''), prov.page || null);
+      } else {
+        window.pdfViewer.highlightBlock(prov.block_id, prov.page || null);
+      }
       switchRightTab('pdfPane');
     } else if (window.pdfViewer) {
       window.pdfViewer.clearHighlight();

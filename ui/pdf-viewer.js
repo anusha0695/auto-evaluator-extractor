@@ -60,12 +60,13 @@
     if (!ovl) ovl = document.getElementById('blockOverlays');
     ovl.innerHTML = '';
     if (!showBlocks) return;
-    const pageBlocks = blocksData.filter(b => b.page_number === pageNum && b.bbox);
+    // Use Number() to handle string/int page_number mismatch
+    const pageBlocks = blocksData.filter(b => Number(b.page_number) === Number(pageNum) && b.bbox);
     pageBlocks.forEach(block => {
       const [x1, y1, x2, y2] = block.bbox;
       const div = document.createElement('div');
       div.className = 'block-overlay';
-      if (String(block.block_id) === highlightedBlockId) div.classList.add('highlighted');
+      if (highlightedBlockId && normalizeBlockId(block.block_id) === highlightedBlockId) div.classList.add('highlighted');
       div.style.left = (x1 * w) + 'px';
       div.style.top = (y1 * h) + 'px';
       div.style.width = ((x2 - x1) * w) + 'px';
@@ -79,10 +80,16 @@
     });
   }
 
+  // Normalize block IDs: "block_11" → "11", "11" → "11", 11 → "11"
+  function normalizeBlockId(id) {
+    if (id == null) return null;
+    return String(id).replace(/^block_/i, '');
+  }
+
   function highlightBlock(blockId, pageNum) {
-    highlightedBlockId = blockId != null ? String(blockId) : null;
-    if (pageNum && pageNum !== currentPage) {
-      renderPage(pageNum);
+    highlightedBlockId = blockId != null ? normalizeBlockId(blockId) : null;
+    if (pageNum && Number(pageNum) !== currentPage) {
+      renderPage(Number(pageNum));
     } else {
       const c = document.getElementById('pdfCanvas');
       if (c) renderBlockOverlays(currentPage, c.width, c.height);
@@ -91,6 +98,32 @@
       const ovl = document.getElementById('blockOverlays');
       if (ovl) { const el = ovl.querySelector('.highlighted'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
     }, 100);
+  }
+
+  /**
+   * Text-based block search fallback.
+   * When provenance block_id doesn't map correctly (e.g. "block_11" naming),
+   * search block text for the field value and highlight the matching block.
+   */
+  function highlightByText(searchText, pageNum) {
+    if (!searchText || !blocksData.length) return;
+    const pg = pageNum ? Number(pageNum) : null;
+    const needle = String(searchText).toLowerCase().trim();
+    // Search for best match: prefer exact page, then any page
+    let best = null;
+    for (const b of blocksData) {
+      const t = (b.text || '').toLowerCase();
+      if (t.includes(needle)) {
+        if (pg && Number(b.page_number) === pg) { best = b; break; }
+        if (!best) best = b;
+      }
+    }
+    if (best) {
+      highlightBlock(best.block_id, best.page_number);
+    } else if (pg) {
+      // No text match — at least navigate to the page
+      highlightBlock(null, pg);
+    }
   }
 
   function clearHighlight() {
@@ -110,5 +143,5 @@
     if (c) renderBlockOverlays(currentPage, c.width, c.height);
   }
 
-  window.pdfViewer = { init, highlightBlock, clearHighlight, nextPage, prevPage, zoom: zoomBy, toggleBlocks, getBlocksData: () => blocksData };
+  window.pdfViewer = { init, highlightBlock, highlightByText, clearHighlight, nextPage, prevPage, zoom: zoomBy, toggleBlocks, getBlocksData: () => blocksData };
 })();
