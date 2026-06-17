@@ -28,21 +28,26 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
-# 20-column lab layout (matches evaluation/config/field_map.yaml and the
-# reference screenshots). Duplicate "Amino Acid Change" preserved per lab convention.
-COLUMNS = [
-    "Biomarker", "Method", "Result", "Interpretation", "Reference Range",
-    "Variant Allele Freq", "DNA Change Type", "Amino Acid Change",
-    "Genomic DNA Change", "Genomic Ref Seq", "Coding DNA Change",
-    "Transcript Ref", "Amino Acid Change", "AA Ref Seq",
-    "Clinical Significance", "Genomic Source", "Ref Assembly",
-    "Chromosome", "Genomic Position", "Exon",
-]
+def _columns_from_field_map() -> list[str]:
+    """Read the lab-layout column order from evaluation/config/field_map.yaml.
+
+    Single source of truth — the same column list is used by load_ground_truth,
+    load_extraction, and render_report. Earlier versions of this file
+    hardcoded a 20-column list that drifted from the YAML (two distinct
+    columns — "Amino Acid Change Type" and "Amino Acid Change" — were
+    collapsed into a single header named twice). Reading from the YAML
+    eliminates the drift.
+    """
+    import yaml
+    p = _repo_root() / "evaluation" / "config" / "field_map.yaml"
+    fm = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    return [str(c.get("header") or "") for c in (fm.get("columns") or []) if c.get("header")]
 
 
-# Per-doc GT content. Each row is a dict keyed by column header. Missing keys
-# render as blank cells. For duplicate columns ("Amino Acid Change" appears
-# twice) the SAME value is written to both cells.
+# Per-doc GT content. Each row is a dict keyed by column header (matching the
+# headers in evaluation/config/field_map.yaml). Missing keys render as blank
+# cells; this lets a doc populate only the columns the source PDF actually
+# reports.
 GT_CONTENT: dict[str, list[dict]] = {
 
     "full_report_Redacted": [
@@ -156,6 +161,7 @@ def write_gt(doc_id: str, out_path: Path) -> None:
             f"GT_CONTENT in evaluation/scripts/bootstrap_gt.py."
         )
 
+    columns = _columns_from_field_map()
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Review Results"
@@ -164,24 +170,21 @@ def write_gt(doc_id: str, out_path: Path) -> None:
     header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
     header_align = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
-    for col_idx, header in enumerate(COLUMNS, start=1):
+    for col_idx, header in enumerate(columns, start=1):
         c = ws.cell(row=1, column=col_idx, value=header)
         c.font = header_font
         c.fill = header_fill
         c.alignment = header_align
 
-    # Sensible column widths (the lab review uses similar widths).
-    widths = {
-        "A": 24, "B": 8, "C": 24, "D": 22, "E": 18, "F": 14, "G": 14, "H": 16,
-        "I": 18, "J": 18, "K": 18, "L": 14, "M": 16, "N": 14, "O": 28,
-        "P": 16, "Q": 16, "R": 12, "S": 16, "T": 8,
-    }
-    for col_letter, w in widths.items():
-        ws.column_dimensions[col_letter].width = w
+    # Width is derived from the header text length — generic over any column
+    # count (avoids the hardcoded A..T map that assumed 20 columns).
+    for col_idx, header in enumerate(columns, start=1):
+        col_letter = openpyxl.utils.get_column_letter(col_idx)
+        ws.column_dimensions[col_letter].width = max(10, min(30, len(header) + 6))
     ws.freeze_panes = "A2"
 
     for r_idx, row in enumerate(rows, start=2):
-        for col_idx, header in enumerate(COLUMNS, start=1):
+        for col_idx, header in enumerate(columns, start=1):
             ws.cell(row=r_idx, column=col_idx, value=row.get(header))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -53,7 +53,7 @@ def _eval_one(doc_id: str, gt_path: Path, ex_path: Path, out_dir: Path) -> int:
     logger.info("evaluation[%s]: gt_rows=%d  ex_rows=%d", doc_id, len(gt_rows), len(ex_rows))
     pairs = match(gt_rows, ex_rows)
     metrics = compute(pairs, field_map.get("columns") or [])
-    write_all(out_dir, doc_id, gt_path, ex_path, metrics)
+    write_all(out_dir, doc_id, gt_path, ex_path, metrics, field_map=field_map)
     logger.info("evaluation[%s]: wrote %s", doc_id, out_dir)
     return 0
 
