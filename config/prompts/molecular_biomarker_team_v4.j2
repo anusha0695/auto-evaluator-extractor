@@ -30,17 +30,38 @@ per biomarker**.
 
 ## 1. What belongs here — and what does NOT
 
-- **DO include:** protein-expression markers by IHC (ER, PR, HER2, MMR proteins,
-  PD-L1, Ki-67, CK5, p40, CD-markers) reported as Positive/Negative, a %, an intensity
-  (1+/2+/3+), or an H-score; and aggregate molecular scores (TMB, MSI status, LOH, HRD,
-  ctDNA Tumor Fraction).
-- **DO NOT include gene SEQUENCE variants** (point mutations, indels, fusions,
-  CNV-as-variant) — those belong to `Genomic_Variant_umbrella` (the genomic_variant_team).
-  A value with c./p./g. change detail, a VAF, or a clinical-significance call is a
-  variant, NOT an other_molecular_biomarker.
-- **DO NOT include** histological findings (nuclear grade, growth pattern, necrosis) or
-  general lab markers (Hb, hCG, glucose, iron, reticulin, RhD).
-- **Do NOT list a testing METHOD** (NGS, FISH, IHC, Sequencing) as a biomarker name.
+Categorize by ENTITY TYPE. This section is for MEASUREMENTS and AGGREGATE
+INDICATORS — rows whose primary identifier is a test name or a computed
+score. Rows whose primary identifier is a HUGO gene symbol belong to the
+genomic_variant_team, regardless of how thin their schema-field coverage
+would be.
+
+The discriminator is a single question:
+
+  **Is the row's primary identifier a HUGO gene symbol?**
+
+If yes → genomic_variant_team. If no (the row is named for a test, an
+aggregate indicator, or a functional flag) → here.
+
+- **DO include — rows NOT identified by a gene symbol:**
+  - Named protein-expression / staining tests reported as Positive/Negative,
+    %, intensity, or H-score.
+  - Aggregate or computed molecular indicators (mutational burden,
+    instability scores, deficiency scores, tumor-fraction estimates, etc.).
+  - Functional flags reported without a gene symbol as the primary
+    identifier.
+
+- **DO NOT include — anything identified by a HUGO gene symbol:**
+  Whatever the gene-level reading looks like — HGVS-coded sequence change,
+  fusion call, CNV-as-variant, allele/genotype string, star-allele call,
+  haplotype name, phenotype label, or a bare Detected/Not-Detected — if the
+  row is identified by a gene, route it to `Genomic_Variant_umbrella`. The
+  variant team handles thin records (most fields `null`) just fine; do not
+  re-home a gene row here just because HGVS/VAF/clinical-significance
+  weren't printed.
+
+- **NOT here (any team):** histological findings, general lab markers, or
+  testing METHODS as names.
 
 ## 2. One FLAT record per biomarker — fields
 

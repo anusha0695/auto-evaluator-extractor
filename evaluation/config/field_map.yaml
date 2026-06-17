@@ -38,8 +38,8 @@ columns:
   - header: "DNA Change Type"
     sources: { variants: dna_change_type,                    biomarkers: "" }
 
-  - header: "Amino Acid Change"
-    sources: { variants: amino_acid_change,                  biomarkers: "" }
+  - header: "Amino Acid Change Type"
+    sources: { variants: amino_acid_change_type,                  biomarkers: "" }
 
   - header: "Genomic DNA Change"
     sources: { variants: genomic_dna_change,                 biomarkers: "" }
@@ -53,7 +53,7 @@ columns:
   - header: "Transcript Ref"
     sources: { variants: transcript_reference_sequence,      biomarkers: "" }
 
-  - header: "Amino Acid Change"          # duplicate column — lab convention; same source
+  - header: "Amino Acid Change"         
     sources: { variants: amino_acid_change,                  biomarkers: "" }
 
   - header: "AA Ref Seq"

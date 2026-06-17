@@ -46,17 +46,22 @@ Order of preference:
    "NeoGenomics", "Tempus", "Foundation Medicine"), copyright footer
    (e.g. "© YYYY NeoGenomics Laboratories, Inc."), lab address with the
    vendor's name. Use the canonical vendor name as printed.
-2. **Product marker inference** — if no explicit wordmark, infer from
-   product markers:
-   - "xT" or "xT genomic profiling" → `Tempus`
-   - "FoundationOne" / "F1CDx" → `Foundation Medicine`
-   - "xGEN" → `Caris`
-   - "Guardant" → `Guardant Health`
-   - "MyChoice" → `Myriad Genetics`
+2. **Product marker inference** — if no explicit wordmark, infer the
+   vendor from any distinctive product / assay / test-line wordmark or
+   trademarked identifier that the report prints. The principle: a
+   wordmark that uniquely identifies a single commercial testing lab
+   maps to that lab. Examples (illustrative, NOT a filter — apply the
+   principle to any wordmark you recognize as a single-vendor product
+   line): `"xT"` / `"xT genomic profiling"` → Tempus; `"FoundationOne"`
+   / `"F1CDx"` → Foundation Medicine; `"xGEN"` → Caris; `"Guardant"`
+   → Guardant Health; `"MyChoice"` → Myriad Genetics.
 3. **Neither present** → `null`. Do not guess from clinic name.
 
-`Vendor_Name` has `extraction_mode: VERBATIM_OR_INFERRED` — inference is
-allowed only via this list.
+`Vendor_Name` has `extraction_mode: VERBATIM_OR_INFERRED` — inference
+is allowed via the product-marker principle in step 2, not just the
+listed examples. If you map a wordmark not in the example list, set
+`needs_review: true` with a `review_reason` naming the wordmark you
+used so an SME can confirm.
 
 ## 3. Practice vs vendor disambiguation — critical
 
@@ -87,12 +92,25 @@ If the report shows separate Ordering and Treating physicians, prefer
 
 ## 5. Title parsing for `Ordering_Provider_*`
 
-The source may print names as:
-- `STANLEY D SCHINKE, M.D.` — all caps, comma-prefixed title, middle
-  initial embedded.
-- `Dr. Jennifer Walker` — title prefix.
-- `Wanda Nguyen, M.D.` — comma title.
-- `Jorge Thomas, D.O.` — non-M.D. title.
+Parse the provider name regardless of its surface form. The same name
+can appear with any combination of these shape attributes — handle them
+all:
+
+- **Title placement** — either as a prefix (`Dr. <name>`) OR as a
+  comma-suffix (`<name>, <title>`).
+- **Title vocabulary** — open-ended medical title strings; emit whatever
+  surface the report uses VERBATIM in `Ordering_Provider_Title`. Common
+  shapes: `Dr.`, `M.D.`, `D.O.`, `PA-C`, but do NOT treat this as a
+  closed list.
+- **Casing** — the source may use ALL CAPS, Title Case, or mixed; treat
+  casing as a presentation detail, not a parsing signal.
+- **Middle initials / middle names** — may be embedded between first
+  and last; drop them (no schema field) instead of stuffing into either
+  name field.
+
+Examples (illustrative, NOT exhaustive):
+`STANLEY D SCHINKE, M.D.` · `Dr. Jennifer Walker` ·
+`Wanda Nguyen, M.D.` · `Jorge Thomas, D.O.`
 
 Extract as:
 - **`Ordering_Provider_First_Name`** — proper case (e.g. "Stanley", "Jennifer"). Cast all-caps to Title Case for proper-name fields *only* — this is the one exception to the VERBATIM rule. Why: downstream consumers (CRM, EHR) require Title Case.

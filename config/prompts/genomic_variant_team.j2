@@ -31,13 +31,38 @@ or an explicit "Not Detected" call for a specifically tested locus).
 
 ## 1. What belongs here (vs other_molecular_biomarker)
 
-- **HERE (Genomic_Variant):** gene sequence changes — `JAK2 V617F`, `BRAF V600E`,
-  `EGFR exon 19 deletion`, fusions, CNVs reported as variants — anything with HGVS-style
-  change detail (c./p./g.), a VAF, a clinical significance call, or a genomic position.
-- **NOT here (→ other_molecular_biomarker_umbrella):** protein-expression by IHC
-  (ER, PR, HER2, Ki-67, PD-L1) and aggregate molecular scores (TMB, MSI, LOH, HRD,
-  ctDNA Tumor Fraction). Those have no per-variant change detail.
-- **NOT here:** histological findings, general lab markers, testing METHODS as names.
+Categorize by ENTITY TYPE, not by how many schema fields can be populated.
+The discriminator is a single question:
+
+  **Is the row's primary identifier a HUGO gene symbol?**
+
+If yes → Genomic_Variant. If the row is named for a measurement, a test, a
+computed/aggregate indicator, or a histological/lab feature → other_molecular_biomarker.
+
+- **HERE (Genomic_Variant) — anything whose primary identifier is a gene symbol:**
+  Whatever the report prints as the gene-level reading lives in this section,
+  regardless of how thin the per-record detail is. Common shapes include
+  HGVS-coded sequence changes (with c./p./g. detail), fusions, CNVs reported
+  as variants, gene-level Detected/Not-Detected calls, allele or genotype
+  strings, and gene-keyed phenotype rows. Missing fields just emit as `null`
+  — that is expected and fine. Examples (illustrative, NOT exhaustive — do
+  NOT use this list as a filter): `JAK2 V617F`, `BRAF V600E`,
+  `EGFR exon 19 deletion`.
+
+- **NOT here (→ other_molecular_biomarker_umbrella) — anything that is NOT
+  identified by a HUGO gene symbol:**
+  - Named tests of expression level / staining intensity reported as
+    Positive/Negative/%/intensity/H-score (rows named for the test, not for a
+    gene).
+  - Aggregate or computed molecular indicators (mutational burden, instability
+    scores, deficiency scores, tumor-fraction estimates, etc.).
+  - Functional flags reported without a gene symbol as the primary identifier
+    ("Stable" / "High" / "Low" alone).
+- **NOT here (any team):** histological findings, general lab markers, testing
+  METHODS as names.
+
+Rule of thumb (re-stated): the primary identifier decides the section. Gene
+symbol → here. Test name / aggregate score / functional flag → biomarker team.
 
 ## 2. Faithful per-mention extraction (no extractor-side dedup)
 
@@ -67,20 +92,22 @@ value is not on the page. Never infer a value the document does not state.
   keep the printed surface if it differs and the dictionary can't justify a rewrite
   (then set `needs_review: true` with a `review_reason`).
 - `method` — VERBATIM (NGS, PCR, FISH, Sanger sequencing, ...).
-- `result` — the variant call status. Reports rarely print a literal "Detected"
-  column for variants — instead, a variant being listed in a found-variants
-  table implies it was detected. Rule:
-    • If the report literally prints a status word for this variant
-      ("Detected", "Not Detected", "Positive", "Negative"), use it VERBATIM.
+- `result` — the gene-level reading the report prints for this row. Take
+  whatever surface form the report uses, VERBATIM:
+    • If the report prints a status word ("Detected", "Not Detected",
+      "Positive", "Negative"), use it.
     • Else if the variant appears in a found / pathogenic / variant-results /
-      mutations-detected / CH-findings / TRACK table (i.e. the report is
-      reporting it as a finding), set `result: "Detected"`.
+      mutations-detected / CH-findings table (i.e. the report is reporting
+      it as a finding), set `result: "Detected"`.
     • Else if the report explicitly says the variant was sought and not found,
       set `result: "Not Detected"`.
+    • Else if the report prints any OTHER gene-level reading — an allele/
+      genotype string, a star-allele call, a phenotype label, a haplotype name —
+      put that string in `result` VERBATIM as printed.
     • Else `null` — never invent a status the source neither states nor implies.
-  The variant's `clinical_significance` (Pathogenic / VUS / Likely Pathogenic /
-  Benign) is a SEPARATE field — keep that wording in `clinical_significance`,
-  not in `result`.
+  Pathogenicity / clinical commentary (Pathogenic / VUS / Likely Pathogenic /
+  Benign, metabolizer status, activity-score narrative, etc.) is a SEPARATE
+  field — keep it in `clinical_significance`, not in `result`.
 - `variant_allele_frequency` — VAF VERBATIM with units (e.g. `"20.3%"`).
 - `dna_change_type`, `amino_acid_change_type` — codified type as printed (open vocab:
   Wild type / Deletion / Duplication / Insertion / Deletion-Insertion / Inversion /
@@ -88,6 +115,10 @@ value is not on the page. Never infer a value the document does not state.
 - `genomic_dna_change` (`g.`), `coding_dna_change` (`c.`), `amino_acid_change` (`p.`) —
   **VERBATIM exactly as printed**, including when the report omits the `g.`/`c.`/`p.`
   prefix (e.g. `1849G>T`, `V617F`). Do NOT add a prefix the document omits.
+  These fields are for **HGVS-style change syntax only**. If the report identifies
+  the row with non-HGVS nomenclature (a genotype, an allele/star-allele identifier,
+  a haplotype name, a phenotype label, etc.), leave these `null` and let `result`
+  carry that surface — do NOT coerce non-HGVS strings into these fields.
 - `genomic_reference_sequence` (NC_/LRG), `transcript_reference_sequence` (NM_ — preserve
   the version integer, `NM_004333.4` ≠ `.3`), `amino_acid_reference_sequence` (NP_).
 - `clinical_significance` — VERBATIM (Pathogenic / Likely Pathogenic / VUS / Likely Benign /

@@ -65,8 +65,14 @@ You are Gemini 2.5 Flash at temperature 0.0.
 - `Genomic_Variant_umbrella` — `GENE_OR_GENE_PRODUCT` entities that appear
   in a `results_table` block, or anywhere a coding-DNA / amino-acid change
   notation is present nearby (`c.1849G>T`, `V617F`, `p.Val617Phe`).
-- `other_molecular_biomarker_umbrella` — `CHEMICAL`, `DISEASE`, or
-  non-gene biomarker mentions (TMB, MSI, PD-L1, HRD score).
+- `other_molecular_biomarker_umbrella` — `CHEMICAL`, `DISEASE`, or any
+  non-gene-keyed biomarker mention. Covers named protein-expression /
+  staining tests reported as Positive / Negative / %, intensity,
+  or H-score; and aggregate / computed molecular indicators (mutational
+  burden, instability scores, deficiency scores, tumor-fraction
+  estimates). Examples (illustrative, NOT a filter — route any entity
+  matching the shape, including ones not on this list): TMB, MSI, PD-L1,
+  HRD score.
 - `tested_biomarker_umbrella` — `GENE_OR_GENE_PRODUCT` entities that appear
   in a panel listing (whether or not a variant was detected). Often
   overlaps with Genomic_Variant_umbrella; emit both candidacies separately
