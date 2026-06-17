@@ -1,0 +1,88 @@
+# Column → JSON-path mapping for the 20-column evaluation workbook.
+#
+# Each column declares its source field per logical section. An empty string
+# means "leave the cell blank for this section". This file is the ONLY
+# evaluation-specific config — comparison rules are GENERIC (see
+# evaluation/lib/canonical.py + compare_cells.py), and aliasing/canonicalization
+# reuses existing pipeline infra (preprocess.hgnc_resolver, agents.linker._canon_change,
+# and config/data/biomarker_synonyms.yaml).
+#
+# Sections (in this stacking order):
+#   variants     → genomic_pathology_extraction.Genomic_Variant_umbrella.Genomic_Variants[]
+#   biomarkers   → genomic_pathology_extraction.other_molecular_biomarker_umbrella.other_molecular_biomarkers[]
+
+sections:
+  - variants
+  - biomarkers
+
+# Columns are emitted in this exact order — matches the lab review-workbook layout.
+columns:
+  - header: "Biomarker"
+    sources: { variants: gene_studied,                       biomarkers: biomarker_name }
+
+  - header: "Method"
+    sources: { variants: method,                             biomarkers: method }
+
+  - header: "Result"
+    sources: { variants: result,                             biomarkers: result }
+
+  - header: "Interpretation"
+    sources: { variants: "",                                 biomarkers: interpretation }
+
+  - header: "Reference Range"
+    sources: { variants: "",                                 biomarkers: reference_range }
+
+  - header: "Variant Allele Freq"
+    sources: { variants: variant_allele_frequency,           biomarkers: "" }
+
+  - header: "DNA Change Type"
+    sources: { variants: dna_change_type,                    biomarkers: "" }
+
+  - header: "Amino Acid Change"
+    sources: { variants: amino_acid_change,                  biomarkers: "" }
+
+  - header: "Genomic DNA Change"
+    sources: { variants: genomic_dna_change,                 biomarkers: "" }
+
+  - header: "Genomic Ref Seq"
+    sources: { variants: genomic_reference_sequence,         biomarkers: "" }
+
+  - header: "Coding DNA Change"
+    sources: { variants: coding_dna_change,                  biomarkers: "" }
+
+  - header: "Transcript Ref"
+    sources: { variants: transcript_reference_sequence,      biomarkers: "" }
+
+  - header: "Amino Acid Change"          # duplicate column — lab convention; same source
+    sources: { variants: amino_acid_change,                  biomarkers: "" }
+
+  - header: "AA Ref Seq"
+    sources: { variants: amino_acid_reference_sequence,      biomarkers: "" }
+
+  - header: "Clinical Significance"
+    sources: { variants: clinical_significance,              biomarkers: "" }
+
+  - header: "Genomic Source"
+    sources: { variants: genomic_source_class,               biomarkers: "" }
+
+  - header: "Ref Assembly"
+    sources: { variants: human_reference_sequence_assembly_version, biomarkers: "" }
+
+  - header: "Chromosome"
+    sources: { variants: chromosome_identifier,              biomarkers: "" }
+
+  - header: "Genomic Position"
+    sources: { variants: genomic_position,                   biomarkers: "" }
+
+  - header: "Exon"
+    sources: { variants: exon,                               biomarkers: "" }
+
+# Row identity — fields that constitute "same entity" between GT and extraction.
+# Row matching tries variants first, then biomarkers (the match-against-both
+# strategy — no section discriminator needed on the GT XLSX).
+identity_keys:
+  variants:
+    - gene_studied            # canonicalized (HGNC + HGVS-prefix strip + upper)
+    - amino_acid_change       # canonicalized (HGVS-prefix strip + upper)
+  biomarkers:
+    - biomarker_name          # canonicalized (biomarker synonyms + upper)

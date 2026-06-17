@@ -67,7 +67,20 @@ value is not on the page. Never infer a value the document does not state.
   keep the printed surface if it differs and the dictionary can't justify a rewrite
   (then set `needs_review: true` with a `review_reason`).
 - `method` — VERBATIM (NGS, PCR, FISH, Sanger sequencing, ...).
-- `result` — VERBATIM call (Detected, Not Detected, Positive, Negative).
+- `result` — the variant call status. Reports rarely print a literal "Detected"
+  column for variants — instead, a variant being listed in a found-variants
+  table implies it was detected. Rule:
+    • If the report literally prints a status word for this variant
+      ("Detected", "Not Detected", "Positive", "Negative"), use it VERBATIM.
+    • Else if the variant appears in a found / pathogenic / variant-results /
+      mutations-detected / CH-findings / TRACK table (i.e. the report is
+      reporting it as a finding), set `result: "Detected"`.
+    • Else if the report explicitly says the variant was sought and not found,
+      set `result: "Not Detected"`.
+    • Else `null` — never invent a status the source neither states nor implies.
+  The variant's `clinical_significance` (Pathogenic / VUS / Likely Pathogenic /
+  Benign) is a SEPARATE field — keep that wording in `clinical_significance`,
+  not in `result`.
 - `variant_allele_frequency` — VAF VERBATIM with units (e.g. `"20.3%"`).
 - `dna_change_type`, `amino_acid_change_type` — codified type as printed (open vocab:
   Wild type / Deletion / Duplication / Insertion / Deletion-Insertion / Inversion /
