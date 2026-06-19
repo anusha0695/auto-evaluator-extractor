@@ -40,12 +40,22 @@ _GT_AA_CHANGE_COL = "Amino Acid Change"
 
 
 def _gt_identity(row: GTRow, section: str) -> tuple | None:
-    """Build the identity tuple from a GT row for the given candidate section."""
+    """Build the identity tuple from a GT row for the given candidate section.
+
+    Variant identity is `(gene, amino_acid_change)` when both are present, OR
+    `(gene,)` alone for gene-keyed rows that legitimately have no HGVS change
+    (HLA typing, pharmacogenomic genes like DPYD/UGT1A1/CYP2D6 — anything
+    using non-HGVS nomenclature). Requiring both fields used to collapse all
+    such rows onto a single shared identity, which then collided in
+    render_report.by_row and silently dropped every record but the last.
+    """
     if section == "variants":
         gene = canonical(row.cells.get(_GT_BIOMARKER_COL))
         aa = canonical(row.cells.get(_GT_AA_CHANGE_COL))
-        if not gene or not aa:
+        if not gene:
             return None
+        if not aa:
+            return (gene,)          # gene-only fallback (HLA, DPYD, …)
         return (gene, aa)
     if section == "biomarkers":
         name = canonical(row.cells.get(_GT_BIOMARKER_COL))
@@ -57,12 +67,16 @@ def _gt_identity(row: GTRow, section: str) -> tuple | None:
 
 def _extracted_identity(row: ExtractedRow) -> tuple | None:
     """Build the identity tuple from an extracted row, using the section the
-    JSON already declared."""
+    JSON already declared. Same gene-only fallback as `_gt_identity` so the
+    two sides stay symmetric (a GT row 'HLA-A' pairs with the extracted
+    'HLA-A' on identity `('HLA-A',)`)."""
     if row.section == "variants":
         gene = canonical(row.cells.get(_GT_BIOMARKER_COL))
         aa = canonical(row.cells.get(_GT_AA_CHANGE_COL))
-        if not gene or not aa:
+        if not gene:
             return None
+        if not aa:
+            return (gene,)          # gene-only fallback (HLA, DPYD, …)
         return (gene, aa)
     if row.section == "biomarkers":
         name = canonical(row.cells.get(_GT_BIOMARKER_COL))
@@ -125,16 +139,30 @@ def match(gt_rows: list[GTRow], ex_rows: list[ExtractedRow]) -> list[RowPair]:
         else:
             # Could not resolve any identity — report as biomarker missing with
             # whatever raw Biomarker cell text we have, so the SME can fix it.
-            raw = gr.cells.get(_GT_BIOMARKER_COL) or "(unknown)"
+            # Use the sheet row number as a last-resort uniqifier so multiple
+            # blank-Biomarker rows don't collide on the same identity.
+            raw = gr.cells.get(_GT_BIOMARKER_COL) or ""
+            canon_raw = canonical(raw) if raw else ""
+            ident = (canon_raw or f"GT-row-{gr.sheet_row}",)
             gr.candidate_section = "biomarkers"
             pairs.append(RowPair(section="biomarkers", gt=gr, extracted=None,
-                                  identity=(canonical(raw) or "(UNKNOWN)",)))
+                                  identity=ident))
 
-    # Spurious — any extracted row that didn't get matched above.
+    # Spurious — any extracted row that didn't get matched above. Each row
+    # MUST get a unique identity so render_report's by_row dict does not
+    # collapse multiple records onto the same key (the bug that made
+    # gene-only HLA/DPYD records vanish from the Review Results sheet).
     for er in ex_rows:
         if id(er) in matched_ex_ids:
             continue
-        ident = _extracted_identity(er) or ("(UNRESOLVED)",)
+        ident = _extracted_identity(er)
+        if ident is None:
+            # Last-resort: canonical(Biomarker) if present, else a
+            # per-record tag derived from the JSON index. Both keep each
+            # unresolved row in its own by_row bucket.
+            raw = er.cells.get(_GT_BIOMARKER_COL) or ""
+            canon_raw = canonical(raw) if raw else ""
+            ident = (canon_raw or f"{er.section}-row-{er.record_index}",)
         pairs.append(RowPair(section=er.section, gt=None, extracted=er, identity=ident))
 
     return pairs

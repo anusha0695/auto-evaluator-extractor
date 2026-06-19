@@ -23,11 +23,22 @@ from typing import Any
 from evaluation.lib.compare_cells import FN, FP, TN, TP, WRONG
 
 
-# Cell fill colors — matches the lab convention from the reference workbook.
-_FILL_TP    = "C6EFCE"   # green
-_FILL_WRONG = "FFEB9C"   # yellow
-_FILL_FN    = "FFC7CE"   # pink (missing)
-_FILL_FP    = "FCE4D6"   # light orange (spurious)
+# Cell fill colors — four maximally-distinct hues so the SME can scan the
+# sheet without needing to think about which color means what.
+#
+#   MATCH     →  GREEN   (extracted = GT after canonicalization)
+#   MISMATCH  →  RED     (both sides have a value, they differ)
+#   MISSED    →  YELLOW  (GT has it, extraction emitted nothing)
+#   EXTRA     →  BLUE    (extraction has it, GT had nothing)
+#
+# A fifth color (PURPLE) is defined but unused at present — reserved for any
+# future verdict category (e.g. NEEDS_REVIEW / UNCERTAIN) so we don't have to
+# re-juggle the palette later.
+_FILL_TP    = "C6EFCE"   # pastel green   — Match
+_FILL_WRONG = "F8B4B4"   # soft red       — Mismatch
+_FILL_FN    = "FFE699"   # clear yellow   — Missed
+_FILL_FP    = "BDD7EE"   # light blue     — Extra
+_FILL_RESERVED_PURPLE = "D5B3E6"   # reserved for a future category
 _HEADER_FG  = "FFFFFF"
 _HEADER_BG  = "305496"
 
@@ -165,9 +176,9 @@ def _write_mismatches_xlsx(path: Path, doc_id: str, cell_verdicts: list[dict],
     headers = ["doc_id", "section", "identity", "column", "verdict",
                "gt_value", "gt_canon", "extracted_value", "ex_canon"]
     bands = {
-        "Wrong":    ([v for v in cell_verdicts if v["verdict"] == WRONG], _FILL_WRONG),
-        "Missing":  ([v for v in cell_verdicts if v["verdict"] == FN],    _FILL_FN),
-        "Spurious": ([v for v in cell_verdicts if v["verdict"] == FP],    _FILL_FP),
+        "Mismatches": ([v for v in cell_verdicts if v["verdict"] == WRONG], _FILL_WRONG),
+        "Missed":     ([v for v in cell_verdicts if v["verdict"] == FN],    _FILL_FN),
+        "Extra":      ([v for v in cell_verdicts if v["verdict"] == FP],    _FILL_FP),
     }
     bold = Font(bold=True)
     for sheet_name, (rows, fill_color) in bands.items():
@@ -287,14 +298,16 @@ def _write_review_results_sheet(wb, doc_id, cell_verdicts,
             # for showing the normalization arrow).
             if verdict == WRONG:
                 cell.comment = Comment(
-                    f"WRONG\nGT: {v.get('gt')}\nExtracted: {v.get('extracted')}",
+                    f"MISMATCH\nGT: {v.get('gt')}\nExtracted: {v.get('extracted')}",
                     "Eval")
             elif verdict == FN:
-                cell.comment = Comment(f"MISSING\nGT: {v.get('gt')}", "Eval")
-                # For missing, show GT value so SME can see what was expected.
-                cell.value = f"[MISSING] {v.get('gt') or ''}"
+                cell.comment = Comment(f"MISSED\nGT had: {v.get('gt')}", "Eval")
+                # For missed cells, show GT value so the SME sees what was expected.
+                cell.value = f"[MISSED] {v.get('gt') or ''}"
             elif verdict == FP:
-                cell.comment = Comment(f"SPURIOUS\nExtracted: {v.get('extracted')}", "Eval")
+                cell.comment = Comment(
+                    f"EXTRA\nExtraction had: {v.get('extracted')}\n(GT had no value here)",
+                    "Eval")
 
 
 def write_review_results_into(
