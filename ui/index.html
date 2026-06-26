@@ -18,7 +18,7 @@
       <span class="badge-pill">AI Genomic Extraction Review</span>
     </div>
   </header>
-  <div class="app-body" style="grid-template-columns: 240px 1fr 1.4fr">
+  <div class="app-body" style="grid-template-columns: 300px 1fr 1.4fr">
     <!-- LEFT SIDEBAR -->
     <aside class="sidebar">
       <div class="sidebar-section">
@@ -34,6 +34,10 @@
           <div class="stat-card"><div class="stat-value" id="bandReviewLight">0</div><div class="stat-label">Review Light</div></div>
           <div class="stat-card"><div class="stat-value" id="bandDropAudit">0</div><div class="stat-label">Drop Audit</div></div>
         </div>
+      </div>
+      <div class="sidebar-section">
+        <h3>⚠ Escalations</h3>
+        <div class="escalation-panel sidebar-escalations" id="escalationPanel"><div class="loading-spinner">Loading escalations…</div></div>
       </div>
       <div class="sidebar-section">
         <h3>Documents</h3>
@@ -80,7 +84,6 @@
       <div class="right-tabs">
         <div class="right-tab active" data-pane="pdfPane" onclick="window.app.switchRightTab('pdfPane')">📄 Document View</div>
         <div class="right-tab" data-pane="tracePane" onclick="window.app.switchRightTab('tracePane')">🔍 Agent Trace</div>
-        <div class="right-tab" data-pane="escalationPane" onclick="window.app.switchRightTab('escalationPane')">⚠ Escalations</div>
       </div>
       <div class="right-content">
         <div class="right-pane active" id="pdfPane">
@@ -91,7 +94,6 @@
           <div class="pdf-canvas-wrap" id="pdfCanvasWrap"><div class="pdf-page-container" id="pdfPageContainer"><canvas id="pdfCanvas"></canvas><div id="blockOverlays"></div></div></div>
         </div>
         <div class="right-pane" id="tracePane"><div class="trace-timeline" id="traceTimeline"><div class="loading-spinner">Loading agent trace…</div></div></div>
-        <div class="right-pane" id="escalationPane"><div class="escalation-panel" id="escalationPanel"><div class="loading-spinner">Loading escalations…</div></div></div>
       </div>
     </div>
   </div>

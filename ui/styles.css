@@ -257,3 +257,11 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--g100);color:var(-
 .tested-chip{background:var(--white);border:1px solid var(--g200);border-radius:20px;padding:8px 18px;font-size:.82rem;font-weight:600;color:var(--g700);display:flex;align-items:center;gap:6px;transition:var(--tr)}
 .tested-chip:hover{border-color:var(--cardinal-light);background:var(--cardinal-bg);color:var(--cardinal-red)}
 .tested-chip .chip-dot{width:8px;height:8px;border-radius:50%;background:var(--green)}
+
+/* Escalations relocated into the left sidebar (was a right-panel tab) */
+.sidebar-escalations { max-height: 340px; overflow-y: auto; padding-right: 2px; }
+.sidebar-escalations .escalation-band { margin-bottom: 10px; }
+.sidebar-escalations .escalation-band h4 { font-size: .72rem; }
+.sidebar-escalations .escalation-item { word-break: break-word; }
+.sidebar-escalations .escalation-item strong { font-size: .76rem; }
+.sidebar-escalations .empty-icon { font-size: 1.4rem; }

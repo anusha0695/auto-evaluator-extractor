@@ -673,7 +673,7 @@
     const order = escalationData.band_order || Object.keys(bands);
     let totalItems = 0;
     order.forEach(band => {
-      const items = bands[band] || [];
+      const items = (bands[band] || []).filter(it => !EXCLUDED_KINDS.has(it.kind || it.defect_type));
       totalItems += items.length;
       const section = document.createElement('div');
       section.className = 'escalation-band';
@@ -685,12 +685,20 @@
         empty.textContent = 'No items in this band';
         section.appendChild(empty);
       }
+      const bandSev = { judgment: 'absent', unresolved: 'inferred', review_light: 'derived', drop_audit: 'inferred' };
       items.forEach(item => {
+        if (!item.triage_band) item.triage_band = band;
         const card = document.createElement('div');
         card.className = 'escalation-item';
-        const sev = item.severity || '';
-        const sevBadge = sev ? `<span class="prov-badge ${sev === 'high' ? 'absent' : sev === 'medium' ? 'inferred' : 'derived'}" style="margin-left:8px">${sev}</span>` : '';
-        card.innerHTML = `<strong>${escHtml(item.ref || item.field || 'Unknown')}${sevBadge}</strong><div style="font-size:.75rem;color:var(--g500);margin-top:4px;line-height:1.4">${escHtml(item.reason || item.defect_type || '')}</div>`;
+        card.style.cursor = 'pointer';
+        card.title = 'Click to locate this in the PDF and see why it was escalated';
+        const kind = item.kind || item.defect_type || '';
+        const kindBadge = kind ? `<span class="prov-badge ${bandSev[band] || 'derived'}" style="margin-left:8px">${escHtml(kind)}</span>` : '';
+        const reason = item.reason || item.detail || item.defect_type || '';
+        card.innerHTML = `<strong>${escHtml(item.ref || item.field || 'Unknown')}${kindBadge}</strong>`
+          + `<div style="font-size:.75rem;color:var(--g500);margin-top:4px;line-height:1.4">${escHtml(reason)}</div>`
+          + `<div style="font-size:.7rem;color:var(--blue);margin-top:5px;font-weight:600">▶ locate &amp; explain</div>`;
+        card.onclick = () => focusEscalation(item);
         section.appendChild(card);
       });
       panel.appendChild(section);
@@ -698,6 +706,148 @@
     if (totalItems === 0) {
       panel.innerHTML += '<div class="escalation-empty"><div class="empty-icon">✅</div>No escalations — all fields passed quality checks</div>';
     }
+  }
+
+  // ── Escalation focus: click an escalation → locate in PDF + explain ──────────
+  // Maps a banded escalation item (from pipeline/vmaw.py: ref/section/kind/detail/
+  // reason + triage_band/vmaw_note/vmaw_proposal) to: PDF highlight + page jump,
+  // the reason, what the SME must check, and the agent's reasoning.
+
+  const RECORD_ARRAYS = {
+    Genomic_Variant_umbrella: 'Genomic_Variants',
+    other_molecular_biomarker_umbrella: 'other_molecular_biomarkers',
+    significant_findings: 'specimen_findings',
+  };
+
+  // What the SME should actually do, keyed by VMAW defect kind.
+  const KIND_GUIDANCE = {
+    binding_refuted: 'The cited evidence may not actually contain this value (possible hallucination or synonym/canonicalization gap). Confirm the highlighted block really states it — if not, correct the value or reject.',
+    dropped_ungroundable: 'This record was DROPPED because no source could be grounded. Confirm it is genuinely absent from the document, or restore it if it really appears.',
+    invalid_hgvs: 'The variant nomenclature failed HGVS validation. Verify the c./p./g. notation against the report and correct it.',
+    block_misroute: 'This value may belong to a different section. Check whether the highlighted block was assigned to the right section.',
+    link_cannot_form: 'An expected relationship between two records could not be formed. Check whether the two records actually relate.',
+    binding_unconfirmed: 'The value-to-source binding could not be confirmed. Verify the highlighted evidence supports the value.',
+  };
+  // Defect kinds that must NOT surface as SME escalations in the UI.
+  const EXCLUDED_KINDS = new Set(['schema_error', 'normalization_invalid']);
+  // Extra guidance from the triage band (priority/disposition).
+  const BAND_GUIDANCE = {
+    judgment: 'Decision required — pick the correct value, ground it yourself, or accept/reject the proposed value.',
+    unresolved: 'Investigate from scratch — the auto-resolver found no answer for this field.',
+    review_light: 'Low-risk — a grounded, uncontested proposal held back from auto-apply. Quick confirm.',
+    drop_audit: 'Audit a deletion — confirm the record is truly absent, or restore it.',
+  };
+
+  function parseRef(item) {
+    let ref = String(item.ref || item.field || '');
+    // Real data sometimes stores a stringified Python list, e.g. "['Genomic_Variant_umbrella']".
+    const listish = ref.match(/^\[\s*'?([^'\]]+)'?\s*\]$/);
+    if (listish) ref = listish[1];
+    const section = item.section || (ref.includes('.') ? ref.split('.')[0] : ref) || currentSection;
+    let recordIndex = 0;
+    const m = ref.match(/\[(\d+)\]/);
+    if (m) recordIndex = parseInt(m[1], 10);
+    const last = ref.includes('.') ? ref.split('.').pop() : ref;
+    let fieldName = (last || '').replace(/\[\d+\]/g, '');
+    // Section-level or empty ref → fall back to the section name as the label.
+    if (!fieldName || fieldName === section) fieldName = section || ref || 'item';
+    return { ref, section, fieldName, recordIndex };
+  }
+
+  // Best-effort provenance lookup: returns {block_id, page, type, rationale, value}.
+  function provFor(section, fieldName, recordIndex) {
+    if (!extraction) return null;
+    let provArr = null, value = null;
+    if (section === 'report_metadata') {
+      const meta = extraction.report_metadata || {};
+      provArr = meta.provenance || [];
+      value = meta[fieldName];
+    } else {
+      const arrName = RECORD_ARRAYS[section];
+      const recs = arrName && extraction[section] ? extraction[section][arrName] : null;
+      const rec = Array.isArray(recs) ? recs[recordIndex || 0] : null;
+      if (rec) { provArr = rec.provenance || []; value = rec[fieldName]; }
+    }
+    if (!Array.isArray(provArr)) provArr = [];
+    const entry = provArr.find(p => p && String(p.field_name) === String(fieldName));
+    if (entry) return Object.assign({}, entry, { value });
+    return value != null ? { value } : null;
+  }
+
+  function pageOfBlock(blockId) {
+    if (blockId == null || !Array.isArray(blocks)) return null;
+    const norm = String(blockId).replace(/^block_/i, '');
+    const b = blocks.find(x => String(x.block_id).replace(/^block_/i, '') === norm);
+    return b ? b.page_number : null;
+  }
+
+  function focusEscalation(item) {
+    const { ref, section, fieldName, recordIndex } = parseRef(item);
+
+    // 1) Center panel → switch to the owning section so the field row is visible.
+    const KNOWN = ['report_metadata', 'Genomic_Variant_umbrella', 'other_molecular_biomarker_umbrella', 'tested_biomarker_umbrella'];
+    if (KNOWN.includes(section)) {
+      document.querySelectorAll('.section-tab').forEach(t => t.classList.toggle('active', t.dataset.section === section));
+      currentSection = section;
+      selectedField = null;
+      renderExtractionTable();
+    }
+
+    // 2) Resolve where it lives in the PDF (vmaw citation → provenance → text).
+    const prov = provFor(section, fieldName, recordIndex) || {};
+    const vmawCites = (item.vmaw_proposal && item.vmaw_proposal.citation_block_ids) || item.citation_block_ids || [];
+    const blockId = (vmawCites && vmawCites[0]) || prov.block_id || null;
+    const page = prov.page || pageOfBlock(blockId) || item.page || null;
+    const value = (item.vmaw_proposal && item.vmaw_proposal.value) || prov.value || null;
+
+    // 3) PDF → highlight the entity and auto-jump to its page.
+    const hasPdf = DOCS[currentDocIdx] && DOCS[currentDocIdx].hasPdf && window.pdfViewer;
+    if (hasPdf) {
+      if (blockId && !String(blockId).startsWith('block_')) window.pdfViewer.highlightBlock(blockId, page);
+      else if (value) window.pdfViewer.highlightByText(String(value), page);
+      else if (blockId) window.pdfViewer.highlightBlock(blockId, page);
+      else if (page) window.pdfViewer.highlightBlock(null, page);
+      switchRightTab('pdfPane');
+    }
+
+    // 4) Agent reasoning: per-field rationale + the most relevant trace step.
+    const fieldReasoning = prov.rationale || '';
+    const traceHit = (agentTraceData || []).filter(s =>
+      s && (s.team === section || s.section === section || (s.plain || '').includes(fieldName) || (s.reasoning || '').includes(fieldName))
+    ).pop();
+    const traceReasoning = traceHit && traceHit.reasoning ? traceHit.reasoning : '';
+
+    // 5) Render the explanation (reason + what-to-check + reasoning) in the
+    //    center detail panel, so it stays visible alongside the PDF.
+    showEscalationDetail(item, { ref, section, fieldName, value, blockId, page, fieldReasoning, traceReasoning, traceAgent: traceHit ? traceHit.agent : '' });
+  }
+
+  function showEscalationDetail(item, ctx) {
+    const panel = document.getElementById('fieldDetail');
+    if (!panel) return;
+    panel.className = 'field-detail';
+    const band = item.triage_band || '';
+    const kind = item.kind || item.defect_type || '';
+    const reason = item.reason || item.detail || '';
+    const whatToCheck = [KIND_GUIDANCE[kind], BAND_GUIDANCE[band]].filter(Boolean).join(' ');
+    const rows = [];
+    rows.push(`<div class="label">Field</div><div class="value">${escHtml(ctx.ref || ctx.fieldName)}</div>`);
+    if (kind) rows.push(`<div class="label">Defect kind</div><div class="value">${escHtml(kind)}</div>`);
+    if (band) rows.push(`<div class="label">Triage band</div><div class="value">${escHtml(band.replace(/_/g, ' '))}</div>`);
+    if (ctx.value != null) rows.push(`<div class="label">Extracted</div><div class="value">${escHtml(String(ctx.value))}</div>`);
+    if (reason) rows.push(`<div class="label">Reason for escalation</div><div class="value rationale">${escHtml(reason)}</div>`);
+    if (whatToCheck) rows.push(`<div class="label">What to check</div><div class="value rationale">${escHtml(whatToCheck)}</div>`);
+    if (ctx.blockId || ctx.page) rows.push(`<div class="label">Source</div><div class="value">Block ${escHtml(String(ctx.blockId || '?'))} · Page ${escHtml(String(ctx.page || '?'))}</div>`);
+    if (ctx.fieldReasoning) rows.push(`<div class="label">Agent reasoning (field)</div><div class="value rationale">${escHtml(ctx.fieldReasoning)}</div>`);
+    if (ctx.traceReasoning) rows.push(`<div class="label">Agent reasoning${ctx.traceAgent ? ' (' + escHtml(ctx.traceAgent) + ')' : ''}</div><div class="value rationale">${escHtml(String(ctx.traceReasoning).substring(0, 600))}</div>`);
+    const fk = fieldKey(ctx.section, ctx.fieldName);
+    panel.innerHTML = `<h4>⚠ Escalation — ${escHtml(ctx.fieldName || 'item')}</h4>`
+      + `<div class="detail-grid">${rows.join('')}</div>`
+      + `<div class="btn-group" style="margin-top:10px">`
+      + `<button class="btn btn-accept" onclick="window.app.acceptField('${escAttr(fk)}', event)">✓ Accept</button>`
+      + `<button class="btn btn-reject" onclick="window.app.rejectField('${escAttr(fk)}', event)">✎ Correct</button>`
+      + `<button class="btn" style="background:var(--g100);color:var(--g600)" onclick="window.app.switchRightTab('tracePane')">🔍 Full agent trace</button>`
+      + `</div>`;
   }
 
   function switchRightTab(paneId) {
@@ -732,6 +882,6 @@
   function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
   function escAttr(s) { return s.replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
 
-  window.app = { init, switchRightTab, smeDecision, onBlockClick, acceptField, rejectField, submitCorrection, cancelCorrection };
+  window.app = { init, switchRightTab, smeDecision, onBlockClick, acceptField, rejectField, submitCorrection, cancelCorrection, focusEscalation };
   document.addEventListener('DOMContentLoaded', init);
 })();
