@@ -40,21 +40,29 @@
       return;
     }
 
-    // Load all documents for aggregate stats
+    // Load all documents for aggregate stats and dashboard verifications
     for (const doc of DOCS) {
       try {
-        const [esc, trace] = await Promise.all([
+        const [esc, trace, ver] = await Promise.all([
           loadJSON(doc.dir, 'escalation_queue_banded.json'),
-          loadJSON(doc.dir, 'agent_trace.json')
+          loadJSON(doc.dir, 'agent_trace.json'),
+          loadJSON(doc.dir, 'verification_v2.json').catch(() => null)
         ]);
         const lastStep = trace[trace.length - 1];
-        allDocsData.push({ id: doc.id, escalation: esc, verdict: lastStep ? lastStep.verdict : 'unknown' });
+        allDocsData.push({
+          id: doc.id,
+          label: doc.label,
+          dir: doc.dir,
+          escalation: esc,
+          verdict: lastStep ? lastStep.verdict : 'unknown',
+          verification: ver
+        });
       } catch (e) { console.warn('Could not load stats for', doc.id, e); }
     }
 
     renderDocList();
     renderAggregateStats();
-    await loadDocument(0);
+    showDashboard();
   }
 
   async function loadDocument(idx) {
@@ -64,6 +72,14 @@
     checkedFields.clear();
     selectedField = null;
     currentSection = 'report_metadata';
+
+    // Show detailed document view and hide dashboard view
+    document.getElementById('dashboardView').style.display = 'none';
+    document.getElementById('documentView').style.display = 'grid';
+
+    // Show header back button
+    const backBtn = document.getElementById('backToQueueBtn');
+    if (backBtn) backBtn.style.display = 'block';
 
     try {
       [extraction, blocks, agentTraceData, escalationData, verificationData, repairLog] = await Promise.all([
@@ -98,8 +114,109 @@
     renderFieldDetail(null);
   }
 
+  function showDashboard() {
+    // Hide document view, show dashboard view
+    document.getElementById('documentView').style.display = 'none';
+    document.getElementById('dashboardView').style.display = 'block';
+    
+    // Hide header back button
+    const backBtn = document.getElementById('backToQueueBtn');
+    if (backBtn) backBtn.style.display = 'none';
+
+    // Reset filter dropdown to "Show All"
+    const filterSelect = document.getElementById('queueFilter');
+    if (filterSelect) filterSelect.value = 'all';
+
+    // Clear active state in doc list
+    document.querySelectorAll('.doc-item').forEach(el => el.classList.remove('active'));
+
+    // Populate stats
+    let totalDocs = DOCS.length;
+    let autoAccepted = 0;
+    let escalated = 0;
+    let pending = 0;
+    allDocsData.forEach(d => {
+      if (d.verdict === 'auto_accept') autoAccepted++;
+      else if (['sme_flag', 'partial_accept', 'fixable', 'escalate'].includes(d.verdict)) escalated++;
+      else pending++;
+    });
+    
+    const totalEl = document.getElementById('dashStatTotal');
+    const acceptedEl = document.getElementById('dashStatAccepted');
+    const escalatedEl = document.getElementById('dashStatEscalated');
+    const pendingEl = document.getElementById('dashStatPending');
+    
+    if (totalEl) totalEl.textContent = totalDocs;
+    if (acceptedEl) acceptedEl.textContent = autoAccepted;
+    if (escalatedEl) escalatedEl.textContent = escalated;
+    if (pendingEl) pendingEl.textContent = pending;
+
+    // Populate table
+    const tbody = document.getElementById('dashboardTableBody');
+    if (tbody) {
+      tbody.innerHTML = '';
+      allDocsData.forEach((d, i) => {
+        const tr = document.createElement('tr');
+        
+        // Count total escalations across all bands
+        let escCount = 0;
+        if (d.escalation && d.escalation.bands) {
+          Object.keys(d.escalation.bands).forEach(band => {
+            escCount += (d.escalation.bands[band] || []).length;
+          });
+        }
+
+        // Verdict styling
+        let verdictClass = 'verdict-unknown';
+        let isClickable = true;
+        if (d.verdict === 'auto_accept') {
+          verdictClass = 'verdict-accepted';
+        } else if (['sme_flag', 'partial_accept', 'fixable', 'escalate'].includes(d.verdict)) {
+          verdictClass = 'verdict-escalated';
+        } else {
+          verdictClass = 'verdict-pending';
+          isClickable = d.verdict !== 'pending';
+        }
+
+        tr.innerHTML = `
+          <td><strong>${escHtml(d.id)}</strong></td>
+          <td><span class="verdict-badge ${verdictClass}">${escHtml(d.verdict)}</span></td>
+          <td><span class="escalation-badge-count ${escCount > 0 ? 'active' : 'zero'}">${escCount} escalation(s)</span></td>
+          <td style="text-align: center;">
+            <button class="btn btn-accept" style="padding:4px 8px; font-size:0.75rem; ${!isClickable ? 'opacity:0.5; cursor:not-allowed;' : ''}" ${!isClickable ? 'disabled' : ''} onclick="window.app.loadDocument(${i})">
+              ${d.verdict === 'pending' ? 'Pending' : 'Review →'}
+            </button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+  }
+
+  function filterQueue(val) {
+    const rows = document.querySelectorAll('#dashboardTableBody tr');
+    rows.forEach((row, idx) => {
+      const d = allDocsData[idx];
+      if (!d) return;
+      
+      let show = false;
+      if (val === 'all') {
+        show = true;
+      } else if (val === 'review') {
+        show = ['sme_flag', 'partial_accept', 'fixable', 'escalate'].includes(d.verdict);
+      } else if (val === 'accepted') {
+        show = d.verdict === 'auto_accept';
+      } else if (val === 'pending') {
+        show = !['auto_accept', 'sme_flag', 'partial_accept', 'fixable', 'escalate'].includes(d.verdict);
+      }
+      
+      row.style.display = show ? '' : 'none';
+    });
+  }
+
   function renderDocList() {
     const list = document.getElementById('docList');
+    if (!list) return;
     list.innerHTML = '';
     DOCS.forEach((doc, i) => {
       const li = document.createElement('li');
@@ -125,12 +242,20 @@
         Object.keys(aggBands).forEach(band => { aggBands[band] += (d.escalation.bands[band] || []).length; });
       }
     });
-    document.getElementById('statTotal').textContent = DOCS.length;
-    document.getElementById('statAccepted').textContent = autoAccepted;
-    document.getElementById('bandJudgment').textContent = aggBands.judgment;
-    document.getElementById('bandUnresolved').textContent = aggBands.unresolved;
-    document.getElementById('bandReviewLight').textContent = aggBands.review_light;
-    document.getElementById('bandDropAudit').textContent = aggBands.drop_audit;
+    
+    const statTotalEl = document.getElementById('statTotal');
+    const statAcceptedEl = document.getElementById('statAccepted');
+    const bandJudgmentEl = document.getElementById('bandJudgment');
+    const bandUnresolvedEl = document.getElementById('bandUnresolved');
+    const bandReviewLightEl = document.getElementById('bandReviewLight');
+    const bandDropAuditEl = document.getElementById('bandDropAudit');
+    
+    if (statTotalEl) statTotalEl.textContent = DOCS.length;
+    if (statAcceptedEl) statAcceptedEl.textContent = autoAccepted;
+    if (bandJudgmentEl) bandJudgmentEl.textContent = aggBands.judgment;
+    if (bandUnresolvedEl) bandUnresolvedEl.textContent = aggBands.unresolved;
+    if (bandReviewLightEl) bandReviewLightEl.textContent = aggBands.review_light;
+    if (bandDropAuditEl) bandDropAuditEl.textContent = aggBands.drop_audit;
   }
 
   // Fields to hide from the report_metadata table
@@ -443,7 +568,9 @@
           </div>
           <div class="biomarker-card-body">
             <div class="bm-stat"><div class="bm-stat-label">Result</div><div class="bm-stat-value ${isPositive ? 'positive' : 'negative'}">${escHtml(bm.result || '—')}</div></div>
+            <div class="bm-stat"><div class="bm-stat-label">Analyte</div><div class="bm-stat-value">${escHtml(bm.analyte || '—')}</div></div>
             <div class="bm-stat"><div class="bm-stat-label">Interpretation</div><div class="bm-stat-value">${escHtml(bm.interpretation || '—')}</div></div>
+            <div class="bm-stat"><div class="bm-stat-label">Genotype</div><div class="bm-stat-value">${escHtml(bm.genotype || '—')}</div></div>
             <div class="bm-stat"><div class="bm-stat-label">Ref Range</div><div class="bm-stat-value">${escHtml(bm.reference_range || '—')}</div></div>
           </div>
         </div>`;
@@ -757,6 +884,7 @@
 
   function renderVerifiers() {
     const list = document.getElementById('verifierList');
+    if (!list) return;
     if (!verificationData || !verificationData.scorecards) return;
     list.innerHTML = '';
     verificationData.scorecards.forEach(sc => {
@@ -986,6 +1114,180 @@
   function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
   function escAttr(s) { return s.replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
 
-  window.app = { init, switchRightTab, smeDecision, onBlockClick, acceptField, rejectField, submitCorrection, cancelCorrection, focusEscalation };
+  // ── Bulk Review & Checkbox Management ────────────────────────
+  function isReviewed(fk) {
+    const dec = fieldDecisions[fk];
+    return dec && (dec.status === 'accepted' || dec.status === 'corrected');
+  }
+
+  function getVisibleUnreviewedFieldKeys() {
+    if (!extraction) return [];
+    if (currentSection === 'report_metadata') {
+      const meta = extraction.report_metadata;
+      if (!meta) return [];
+      return Object.keys(meta)
+        .filter(k => !HIDDEN_META_FIELDS.includes(k))
+        .map(field => fieldKey('report_metadata', field))
+        .filter(fk => !isReviewed(fk));
+    }
+    if (currentSection === 'Genomic_Variant_umbrella') {
+      if (activeVariantIdx < 0) return [];
+      const section = extraction.Genomic_Variant_umbrella;
+      if (!section || !section.Genomic_Variants) return [];
+      const variant = section.Genomic_Variants[activeVariantIdx];
+      if (!variant) return [];
+      const fields = Object.keys(variant).filter(k => k !== 'provenance' && k !== 'hgvs_normalized' && k !== 'needs_review' && k !== 'review_reason');
+      return fields.map(field => fieldKey('Genomic_Variant_umbrella', field + '[' + activeVariantIdx + ']')).filter(fk => !isReviewed(fk));
+    }
+    if (currentSection === 'other_molecular_biomarker_umbrella') {
+      if (activeBiomarkerIdx < 0) return [];
+      const section = extraction.other_molecular_biomarker_umbrella;
+      if (!section || !section.other_molecular_biomarkers) return [];
+      const bm = section.other_molecular_biomarkers[activeBiomarkerIdx];
+      if (!bm) return [];
+      const fields = Object.keys(bm).filter(k => k !== 'provenance' && k !== 'needs_review' && k !== 'review_reason');
+      return fields.map(field => fieldKey('other_molecular_biomarker_umbrella', field + '[' + activeBiomarkerIdx + ']')).filter(fk => !isReviewed(fk));
+    }
+    if (currentSection === 'tested_biomarker_umbrella') {
+      const section = extraction.tested_biomarker_umbrella;
+      if (!section) return [];
+      const reviewFields = Object.keys(section).filter(k => k !== 'llm_confidence_score');
+      return reviewFields.map(field => fieldKey('tested_biomarker_umbrella', field)).filter(fk => !isReviewed(fk));
+    }
+    return [];
+  }
+
+  function updateSelectAllCheckboxState() {
+    const chk = document.getElementById('selectAllFields');
+    if (!chk) return;
+    const keys = getVisibleUnreviewedFieldKeys();
+    const allChecked = keys.length > 0 && keys.every(fk => checkedFields.has(fk));
+    chk.checked = allChecked;
+    updateBulkActionBar();
+  }
+
+  function getCheckedFieldsForCurrentSection() {
+    const prefix = currentSection + '::';
+    return Array.from(checkedFields).filter(fk => fk.startsWith(prefix));
+  }
+
+  function updateBulkActionBar() {
+    const bar = document.getElementById('bulkActionBar');
+    if (!bar) return;
+    const currentChecked = getCheckedFieldsForCurrentSection();
+    if (currentChecked.length > 0) {
+      bar.style.display = 'flex';
+      bar.innerHTML = `
+        <div><span id="bulkCheckedCount">${currentChecked.length}</span> field(s) selected</div>
+        <div class="bar-right">
+          <button class="btn-bulk-accept" onclick="window.app.bulkAccept()">✓ Bulk Accept</button>
+          <button class="btn-bulk-cancel" onclick="window.app.bulkCancel()">Clear</button>
+        </div>
+      `;
+    } else {
+      bar.style.display = 'none';
+      bar.innerHTML = '';
+    }
+  }
+
+  function rerenderCurrentSection() {
+    renderExtractionTable();
+  }
+
+  function toggleSelectAll(chk) {
+    const keys = getVisibleUnreviewedFieldKeys();
+    if (chk.checked) {
+      keys.forEach(fk => checkedFields.add(fk));
+    } else {
+      keys.forEach(fk => checkedFields.delete(fk));
+    }
+    rerenderCurrentSection();
+    updateSelectAllCheckboxState();
+  }
+
+  function handleFieldCheck(fk, chk) {
+    if (chk.checked) {
+      checkedFields.add(fk);
+    } else {
+      checkedFields.delete(fk);
+    }
+    updateSelectAllCheckboxState();
+    rerenderCurrentSection();
+  }
+
+  function handleVariantCheck(vi, chk) {
+    const section = extraction.Genomic_Variant_umbrella;
+    if (!section || !section.Genomic_Variants) return;
+    const variant = section.Genomic_Variants[vi];
+    if (!variant) return;
+    const fields = Object.keys(variant).filter(k => k !== 'provenance' && k !== 'hgvs_normalized' && k !== 'needs_review' && k !== 'review_reason');
+    fields.forEach(field => {
+      const fk = fieldKey('Genomic_Variant_umbrella', field + '[' + vi + ']');
+      if (!isReviewed(fk)) {
+        if (chk.checked) checkedFields.add(fk);
+        else checkedFields.delete(fk);
+      }
+    });
+    rerenderCurrentSection();
+    updateBulkActionBar();
+  }
+
+  function handleBiomarkerCheck(bi, chk, event) {
+    if (event) event.stopPropagation();
+    const section = extraction.other_molecular_biomarker_umbrella;
+    if (!section || !section.other_molecular_biomarkers) return;
+    const bm = section.other_molecular_biomarkers[bi];
+    if (!bm) return;
+    const fields = Object.keys(bm).filter(k => k !== 'provenance' && k !== 'needs_review' && k !== 'review_reason');
+    fields.forEach(field => {
+      const fk = fieldKey('other_molecular_biomarker_umbrella', field + '[' + bi + ']');
+      if (!isReviewed(fk)) {
+        if (chk.checked) checkedFields.add(fk);
+        else checkedFields.delete(fk);
+      }
+    });
+    rerenderCurrentSection();
+    updateBulkActionBar();
+  }
+
+  function bulkAccept() {
+    const currentChecked = getCheckedFieldsForCurrentSection();
+    currentChecked.forEach(fk => {
+      fieldDecisions[fk] = { status: 'accepted' };
+      checkedFields.delete(fk);
+    });
+    rerenderCurrentSection();
+    updateSelectAllCheckboxState();
+  }
+
+  function bulkCancel() {
+    const currentChecked = getCheckedFieldsForCurrentSection();
+    currentChecked.forEach(fk => {
+      checkedFields.delete(fk);
+    });
+    rerenderCurrentSection();
+    updateSelectAllCheckboxState();
+  }
+
+  window.app = {
+    init,
+    switchRightTab,
+    smeDecision,
+    onBlockClick,
+    acceptField,
+    rejectField,
+    submitCorrection,
+    cancelCorrection,
+    focusEscalation,
+    toggleSelectAll,
+    handleFieldCheck,
+    handleVariantCheck,
+    handleBiomarkerCheck,
+    bulkAccept,
+    bulkCancel,
+    showDashboard,
+    loadDocument,
+    filterQueue
+  };
   document.addEventListener('DOMContentLoaded', init);
 })();

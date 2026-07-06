@@ -70,9 +70,11 @@ array, no nested change-detail object, no per-record class tag):
 
 - `biomarker_name` — VERBATIM name as stated (ER, PR, HER2, PD-L1, TMB, MSI, ...). Call
   `biomarker_normalize` for the canonical identity key; keep the printed surface as the value.
+- `analyte` — VERBATIM (e.g., "Protein", "DNA", "RNA"). The specific analyte evaluated.
 - `method` — VERBATIM (IHC, NGS, FISH, Special Stains). `null` if not stated.
 - `result` — VERBATIM, units preserved (`"3+"`, `"80%"`, `"Percentage of positive nuclei = 0%"`,
   `"TMB 12 mut/Mb"`, `"MSI-High"`, `"Positive (strong, 95%)"`).
+- `genotype` — VERBATIM (e.g., "A*30:02, A*02:01"). Specific alleles (ONLY for HLA and PGx rows).
 - `reference_range` — VERBATIM if printed, else `null`.
 - `interpretation` — clinical interpretation as printed (`"negative"`, `"positive"`,
   `"Stable"`, `"TMB-Low"`), else `null`.

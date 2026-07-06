@@ -189,7 +189,7 @@ pathology_biomarkers_findings:               # ← other_molecular_biomarker_umb
           result: other_molecular_biomarkers[].findings[].result
           method: other_molecular_biomarkers[].findings[].method
           interpretation: "other_molecular_biomarkers[].findings[].assertion  (fallback → findings[].interpretation when assertion is null)"
-          details: "other_molecular_biomarkers[].findings[].details  +  FOLDED variant_detail (Decision D: append amino_acid_change, coding/genomic HGVS, exon, VAF, clinical_significance, genomic_source_class, allelic_state)"
+          details: "other_molecular_biomarkers[].findings[].details  +  FOLDED variant_detail / analyte / genotype (Decision D: append amino_acid_change, coding/genomic HGVS, exon, VAF, clinical_significance, genomic_source_class, allelic_state)"
   _dropped: "biomarker_class, specimen_id, method_source_type, reference_range, occurrences, provenance, page_number(per-finding), variant_detail(folded into details)  [assertion now maps to interpretation]"
 
 # -----------------------------------------------------------------------------

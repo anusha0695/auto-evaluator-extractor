@@ -276,11 +276,12 @@ def _fold_variant(details: Any, vd: Any) -> str | None:
             val = vd.get(key)
             if val not in (None, ""):
                 pieces.append(f"{label}{val}")
-        norm = vd.get("hgvs_normalized") if isinstance(vd.get("hgvs_normalized"), dict) else {}
-        if not vd.get("amino_acid_change") and norm.get("amino_acid"):
-            pieces.append(str(norm["amino_acid"]))
-        if not vd.get("coding_dna_change") and norm.get("coding"):
-            pieces.append(str(norm["coding"]))   # normalized form already carries the c. prefix
+        norm = vd.get("hgvs_normalized")
+        if isinstance(norm, dict):
+            if not vd.get("amino_acid_change") and norm.get("amino_acid") not in (None, ""):
+                pieces.append(str(norm["amino_acid"]))
+            if not vd.get("coding_dna_change") and norm.get("coding") not in (None, ""):
+                pieces.append(str(norm["coding"]))   # normalized form already carries the c. prefix
     if not pieces:
         return details if details not in (None, "") else None
     return "; ".join(pieces)
@@ -318,9 +319,20 @@ def _biomarkers_findings(umb: dict[str, Any], variant_umb: dict[str, Any] | None
                 })
         else:                                                         # v4 FLAT shape: the record IS the finding
             if bm.get("result") not in (None, ""):
+                details_parts = []
+                ref_range = bm.get("reference_range")
+                if ref_range not in (None, ""):
+                    details_parts.append(f"reference_range: {ref_range}")
+                analyte = bm.get("analyte")
+                if analyte not in (None, ""):
+                    details_parts.append(f"analyte: {analyte}")
+                genotype = bm.get("genotype")
+                if genotype not in (None, ""):
+                    details_parts.append(f"genotype: {genotype}")
+
                 flat.append({
                     "result": bm.get("result"), "method": bm.get("method"),
-                    "details": bm.get("reference_range"),
+                    "details": "; ".join(details_parts) if details_parts else None,
                     "interpretation": bm.get("interpretation"),
                 })
         if not flat:
@@ -399,7 +411,7 @@ def production_label_identity(ref: str, strip: set[str] | None = None) -> str | 
     internal-only key that's stripped from production (provenance, needs_review,
     hgvs_normalized, …) so the UI hides it."""
     strip = strip if strip is not None else _IDENTITY_STRIP_DEFAULT
-    parts = str(ref).split(".")
+    parts = ref.split(".")
     leaf = parts[-1].split("[")[0]
     if leaf in strip:
         return None
@@ -412,7 +424,7 @@ def production_label(ref: str, admin_inv: dict[str, str]) -> str | None:
     field does NOT survive into the production schema (so the UI can hide it).
     This is the LEGACY pathology_extraction labeler; identity-v4 uses
     production_label_identity()."""
-    parts = str(ref).split(".")
+    parts = ref.split(".")
     sec = parts[0]
     leaf = parts[-1].split("[")[0]
     if sec == "report_metadata":
@@ -430,7 +442,7 @@ def production_label(ref: str, admin_inv: dict[str, str]) -> str | None:
             return "pathology_biomarkers_findings › findings › interpretation (← assertion)"
         if leaf == "interpretation":
             return "pathology_biomarkers_findings › findings › interpretation"
-        if "variant_detail" in ref:
+        if "variant_detail" in ref or leaf in ("analyte", "genotype"):
             return "pathology_biomarkers_findings › findings › details (folded)"
         return None                             # biomarker_class, specimen_id, method_source_type, … dropped
     if sec == "Genomic_Variant_umbrella":                # v4 (D1): variants fold into the biomarker-findings section

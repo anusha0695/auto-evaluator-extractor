@@ -95,21 +95,9 @@
         <h1 class="main-title">SME Review Platform</h1>
         <p class="sub-title">AI Genomic Extraction Review</p>
       </div>
-      <div class="badge-container">
-        <div class="header-badge">
-          <svg class="badge-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M6 3h12M8 3v6.52c0 .84-.33 1.65-.92 2.25L3.6 15.34C2.59 16.36 3.31 18 4.75 18h14.5c1.44 0 2.16-1.64 1.15-2.66l-3.48-3.57a3.17 3.17 0 0 1-.92-2.25V3" />
-          </svg>
-          <span>Demo</span>
-        </div>
-        <div class="header-badge">
-          <svg class="badge-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z" />
-            <circle cx="12" cy="10" r="3" />
-          </svg>
-          <span>PHI</span>
-        </div>
-      </div>
+      <button id="backToQueueBtn" class="btn-back-dashboard" style="display: none; margin-left: 20px; border: 1px solid var(--g200); background: var(--white); color: var(--g700);" onclick="window.app.showDashboard()">
+        ← Back to Queue
+      </button>
     </div>
     <div class="header-right">
       <div class="user-profile">
@@ -124,39 +112,70 @@
       </div>
     </div>
   </header>
-  <div class="app-body" style="grid-template-columns: 300px 1fr 1.4fr">
+
+  <!-- DASHBOARD / LANDING PAGE -->
+  <div id="dashboardView" class="dashboard-container">
+    <div class="dashboard-header">
+      <h2>📋 Extraction Queue</h2>
+      <p>Overview of all genomic extraction runs ready for SME review</p>
+    </div>
+    
+    <div class="dashboard-stats-row">
+      <div class="dash-stat-card">
+        <div class="dash-stat-val" id="dashStatTotal">0</div>
+        <div class="dash-stat-lbl">Total Documents</div>
+      </div>
+      <div class="dash-stat-card green">
+        <div class="dash-stat-val" id="dashStatAccepted">0</div>
+        <div class="dash-stat-lbl">Auto Accepted</div>
+      </div>
+      <div class="dash-stat-card amber">
+        <div class="dash-stat-val" id="dashStatEscalated">0</div>
+        <div class="dash-stat-lbl">Escalated to SME</div>
+      </div>
+      <div class="dash-stat-card blue">
+        <div class="dash-stat-val" id="dashStatPending">0</div>
+        <div class="dash-stat-lbl">Pending / In Progress</div>
+      </div>
+    </div>
+
+    <!-- Filter Bar -->
+    <div class="dashboard-filter-bar" style="margin-bottom: 16px; display: flex; align-items: center; gap: 12px; background: var(--white); padding: 12px 20px; border: 1px solid var(--g200); border-radius: var(--r-md); box-shadow: var(--shadow-sm);">
+      <span style="font-weight: 600; color: var(--g700); font-size: 0.85rem;">Filter Queue:</span>
+      <select id="queueFilter" class="sme-input" style="max-width: 240px; margin-bottom: 0;" onchange="window.app.filterQueue(this.value)">
+        <option value="all">Show All Documents</option>
+        <option value="review">Requires Review (Escalated / Partial)</option>
+        <option value="accepted">Auto Accepted</option>
+        <option value="pending">Pending / In Progress</option>
+      </select>
+    </div>
+
+    <div class="dashboard-table-card">
+      <table class="dashboard-table">
+        <thead>
+          <tr>
+            <th>Document ID</th>
+            <th>Pipeline Verdict</th>
+            <th>Escalations</th>
+            <th style="width: 120px; text-align: center;">Action</th>
+          </tr>
+        </thead>
+        <tbody id="dashboardTableBody">
+          <!-- Populated dynamically -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- DETAILED DOCUMENT REVIEW VIEW -->
+  <div id="documentView" class="app-body" style="display: none; grid-template-columns: 300px 1fr 1.4fr">
     <!-- LEFT SIDEBAR -->
     <aside class="sidebar">
-      <div class="sidebar-section">
-        <h3>Queue Statistics</h3>
-        <div class="stat-grid">
-          <div class="stat-card"><div class="stat-value" id="statTotal">1</div><div class="stat-label">Total Docs</div></div>
-          <div class="stat-card green"><div class="stat-value" id="statAccepted">0</div><div class="stat-label">Auto Accepted</div></div>
-        </div>
-        <h3 style="margin-top:12px">Escalation Bands</h3>
-        <div class="stat-grid">
-          <div class="stat-card"><div class="stat-value" id="bandJudgment">0</div><div class="stat-label">Judgment</div></div>
-          <div class="stat-card"><div class="stat-value" id="bandUnresolved">0</div><div class="stat-label">Unresolved</div></div>
-          <div class="stat-card"><div class="stat-value" id="bandReviewLight">0</div><div class="stat-label">Review Light</div></div>
-          <div class="stat-card"><div class="stat-value" id="bandDropAudit">0</div><div class="stat-label">Drop Audit</div></div>
-        </div>
-      </div>
       <div class="sidebar-section">
         <h3>⚠ Escalations</h3>
         <div class="escalation-panel sidebar-escalations" id="escalationPanel"><div class="loading-spinner">Loading escalations…</div></div>
       </div>
-      <div class="sidebar-section">
-        <h3>Documents</h3>
-        <ul class="doc-list" id="docList"></ul>
-      </div>
-      <div class="sidebar-section">
-        <h3>Pipeline Verdict</h3>
-        <div class="decision-status"><span class="status-dot accepted"></span><span id="verdictText" style="font-weight:600">auto_accept</span></div>
-      </div>
-      <div class="sidebar-section">
-        <h3>Verification Checks</h3>
-        <div class="verifier-list" id="verifierList"></div>
-      </div>
+
       <div class="sidebar-section">
         <h3>SME Decision</h3>
         <div class="decision-status"><span class="status-dot" id="smeStatusDot"></span><span>Current: </span><span id="smeStatusText" style="font-weight:600">Pending</span></div>

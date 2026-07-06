@@ -59,6 +59,7 @@ TextRole = Literal[
 
 TargetUmbrellaHint = Literal[
     "report_metadata",
+    "Genomic_Variant_umbrella",          # emitted by block_profiler.j2 for gene sequence variants
     "other_molecular_biomarker_umbrella",
     "tested_biomarker_umbrella",
     # Phase 2 (schema v3):
@@ -107,7 +108,7 @@ class BlockProfiler:
         prompt_renderer: PromptRenderer,
         model_name: str | None = None,
         temperature: float | None = None,
-        max_blocks_per_call: int = 300,
+        max_blocks_per_call: int = 50,
         max_concurrent_batches: int = 3,
     ) -> None:
         self._renderer = prompt_renderer
@@ -118,10 +119,12 @@ class BlockProfiler:
             temperature if temperature is not None
             else os.environ.get("GEMINI_TEMPERATURE", "0.0")
         )
-        # Batch size: max blocks per Gemini call. Larger prompts trigger
-        # safety filters / refusals / truncation more often (we saw exactly
-        # this when DocAI's default processor started returning richer
-        # output). 300 keeps each call comfortably under any soft limits.
+        # Batch size: max blocks per Gemini call. On large documents (20+
+        # pages) each block's text and the structured-output schema together
+        # can push prompt tokens high enough that Gemini truncates its JSON
+        # output before classifying every block — causing the 1:1 check to
+        # fail (e.g. "44 items for 100 blocks"). 50 blocks keeps each call
+        # well within Gemini's safe output budget even for dense reports.
         self._max_blocks_per_call = max_blocks_per_call
         # Parallelism: how many Gemini batches can run concurrently. 3 is
         # a safe default that avoids Vertex rate limits while still
@@ -295,16 +298,26 @@ class BlockProfiler:
         """
         from langchain_google_genai import ChatGoogleGenerativeAI
 
-        # max_output_tokens: a 300-block batch emits 300 BlockProfileItem
-        # objects (~6 fields each); the default ~8K output ceiling can
-        # truncate mid-array and produce JSON that fails validation.
-        # Set to the model max (Gemini 2.5 Flash = 65536) so the limit
-        # never bites — we'd rather pay for tokens than silently lose
-        # blocks from the classification.
+        # max_output_tokens: even with 50-block batches, each item emits
+        # ~6 fields of JSON. The default ~8K output ceiling can still
+        # truncate mid-array on dense documents. Set to the model max
+        # (Gemini 2.5 Flash = 65536).
+        #
+        # COMPATIBILITY: older langchain-google-genai versions ignore
+        # max_output_tokens as a top-level kwarg; pass it via model_kwargs
+        # as well so it reaches the API regardless of SDK version.
+        # thinking_budget=0 disables the thinking/reasoning preamble,
+        # which wastes output tokens before the JSON array starts.
         llm = ChatGoogleGenerativeAI(
             model=self._model_name,
             temperature=self._temperature,
             max_output_tokens=65536,
+            model_kwargs={
+                "generation_config": {
+                    "max_output_tokens": 65536,
+                    "thinking_config": {"thinking_budget": 0},
+                },
+            },
         )
         structured = llm.with_structured_output(
             BlockProfilerOutput, method="json_mode",
@@ -328,10 +341,13 @@ class BlockProfiler:
         """Trim the block payload sent to Gemini — we don't ship the bbox
         coordinates (irrelevant for semantic classification, wastes tokens)."""
         text = b.get("text", "") or ""
-        # Cap each block's text — long content blocks (interpretation
-        # paragraphs) shouldn't dominate the prompt.
-        if len(text) > 600:
-            text = text[:600] + "…"
+        # Cap each block's text — on large documents (20+ pages) long
+        # interpretation paragraphs can push each batch's prompt past
+        # Gemini's safe input budget, squeezing the output budget and
+        # causing mid-array truncation. 300 chars is sufficient for
+        # semantic role classification.
+        if len(text) > 300:
+            text = text[:300] + "…"
         return {
             "block_id": b.get("block_id"),
             "page_number": b.get("page_number"),
