@@ -17,14 +17,28 @@ html{font-size:14px;-webkit-font-smoothing:antialiased}
 body{font-family:'Inter',system-ui,sans-serif;background:var(--g100);color:var(--g800);height:100vh;overflow:hidden}
 
 /* Header */
-.app-header{display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,var(--cardinal-red),var(--cardinal-dark));color:#fff;padding:0 24px;height:52px;box-shadow:0 2px 8px rgba(200,16,46,.25);z-index:100;position:relative}
-.app-header .logo{display:flex;align-items:center;gap:12px;font-weight:700;font-size:1.1rem;letter-spacing:-.02em}
-.app-header .logo svg{width:28px;height:28px}
-.app-header .header-right{display:flex;align-items:center;gap:16px;font-size:.85rem;opacity:.9}
-.badge-pill{background:rgba(255,255,255,.2);padding:3px 10px;border-radius:20px;font-size:.75rem;font-weight:600;backdrop-filter:blur(4px)}
+.app-header{display:flex;align-items:center;justify-content:space-between;background:var(--white);color:var(--g800);padding:0 24px;height:64px;border-bottom:1px solid var(--g200);box-shadow:0 1px 3px rgba(0,0,0,.05);z-index:100;position:relative}
+.app-header .header-left{display:flex;align-items:center}
+.app-header .cardinal-logo{display:flex;align-items:center;height:32px}
+.app-header .cardinal-logo svg{height:28px;width:auto}
+.app-header .divider{width:1px;height:32px;background:var(--g200);margin:0 20px}
+.app-header .title-block{display:flex;flex-direction:column;justify-content:center}
+.app-header .main-title{font-size:1.15rem;font-weight:700;color:var(--g900);line-height:1.2;letter-spacing:-0.01em}
+.app-header .sub-title{font-size:0.75rem;font-weight:500;color:var(--g500);line-height:1.2}
+.app-header .badge-container{display:flex;align-items:center;gap:8px;margin-left:24px}
+.app-header .header-badge{display:flex;align-items:center;gap:5px;padding:4px 10px;background:var(--g50);border:1px solid var(--g200);border-radius:6px;font-size:0.75rem;font-weight:600;color:var(--g600)}
+.app-header .badge-icon{color:var(--g500)}
+
+.app-header .header-right{display:flex;align-items:center;gap:16px}
+.app-header .user-profile{display:flex;align-items:center;gap:10px;cursor:pointer}
+.app-header .user-info{display:flex;flex-direction:column;text-align:right}
+.app-header .user-name{font-size:0.85rem;font-weight:600;color:var(--g800);line-height:1.2}
+.app-header .user-role{font-size:0.7rem;font-weight:500;color:var(--g500);line-height:1.2}
+.app-header .user-avatar{width:32px;height:32px;border-radius:50%;background:var(--cardinal-red);color:var(--white);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.8rem;box-shadow:0 2px 4px rgba(200, 16, 46, 0.2)}
+.app-header .user-dropdown-arrow{color:var(--g500)}
 
 /* Layout */
-.app-body{display:grid;grid-template-columns:250px 1fr 1fr;height:calc(100vh - 52px);overflow:hidden}
+.app-body{display:grid;grid-template-columns:250px 1fr 1fr;height:calc(100vh - 64px);overflow:hidden}
 
 /* Sidebar */
 .sidebar{background:var(--white);border-right:1px solid var(--g200);display:flex;flex-direction:column;overflow-y:auto;scrollbar-width:thin}
@@ -265,3 +279,50 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--g100);color:var(-
 .sidebar-escalations .escalation-item { word-break: break-word; }
 .sidebar-escalations .escalation-item strong { font-size: .76rem; }
 .sidebar-escalations .empty-icon { font-size: 1.4rem; }
+
+/* Bulk Action Bar */
+.bulk-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--green-bg);
+  border-bottom: 1px solid var(--green);
+  padding: 10px 16px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #065F46;
+  animation: slide-down 0.2s ease-out;
+}
+.bulk-action-bar .btn-bulk-accept {
+  background: var(--green);
+  color: #fff;
+  border: none;
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: var(--tr);
+}
+.bulk-action-bar .btn-bulk-accept:hover {
+  background: #059669;
+}
+.bulk-action-bar .btn-bulk-cancel {
+  background: transparent;
+  color: #065F46;
+  border: none;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: underline;
+  margin-left: 12px;
+}
+.bulk-action-bar .btn-bulk-cancel:hover {
+  color: #044e39;
+}
+.bulk-action-bar .bar-right {
+  display: flex;
+  align-items: center;
+}

@@ -13,6 +13,7 @@
   let verificationData = null, repairLog = [];
   let currentSection = 'report_metadata', selectedField = null;
   let fieldDecisions = {};
+  let checkedFields = new Set();
   let allDocsData = [];
 
   async function loadJSON(dir, file) {
@@ -60,6 +61,7 @@
     currentDocIdx = idx;
     const doc = DOCS[idx];
     fieldDecisions = {};
+    checkedFields.clear();
     selectedField = null;
     currentSection = 'report_metadata';
 
@@ -153,8 +155,10 @@
         tab.classList.add('active');
         currentSection = tab.dataset.section;
         selectedField = null;
+        checkedFields.clear();
         renderExtractionTable();
         renderFieldDetail(null);
+        updateBulkActionBar();
       };
     });
   }
@@ -168,6 +172,7 @@
       if (tbl) tbl.style.display = '';
       const tbody = document.getElementById('extractionBody');
       if (tbody) { tbody.innerHTML = ''; renderMetadataRows(tbody); }
+      updateSelectAllCheckboxState();
       // Remove any custom view
       const custom = area.querySelector('.custom-section-view');
       if (custom) custom.remove();
@@ -213,9 +218,10 @@
     const tr = document.createElement('tr');
     if (dec && dec.status === 'accepted') tr.classList.add('row-accepted');
     if (dec && dec.status === 'corrected') tr.classList.add('row-corrected');
+    const isReviewed = dec && (dec.status === 'accepted' || dec.status === 'corrected');
     const displayVal = dec && dec.status === 'corrected' ? dec.correctedValue : (val !== null ? String(val) : null);
     tr.innerHTML = `
-      <td><input type="checkbox" class="field-checkbox"></td>
+      <td><input type="checkbox" class="field-checkbox" ${isReviewed ? 'disabled style="opacity:0.3"' : ''} ${checkedFields.has(fk) ? 'checked' : ''} onchange="window.app.handleFieldCheck('${escAttr(fk)}', this)"></td>
       <td class="field-name">${escHtml(field)}</td>
       <td class="field-value ${displayVal === null ? 'null-val' : ''}">${displayVal !== null ? escHtml(displayVal).substring(0, 120) : '—'}</td>
       <td><span class="prov-badge ${prov.type || 'absent'}">${prov.type || 'absent'}</span></td>
@@ -285,8 +291,21 @@
       const tr = document.createElement('tr');
       if (v.needs_review) tr.classList.add('needs-review');
       if (vi === activeVariantIdx) tr.classList.add('active-variant');
+
+      const fields = Object.keys(v).filter(k => k !== 'provenance' && k !== 'hgvs_normalized' && k !== 'needs_review' && k !== 'review_reason');
+      const unreviewedFields = fields.filter(field => {
+        const fk = fieldKey('Genomic_Variant_umbrella', field + '[' + vi + ']');
+        const dec = fieldDecisions[fk];
+        return !(dec && (dec.status === 'accepted' || dec.status === 'corrected'));
+      });
+      const allChecked = unreviewedFields.length > 0 && unreviewedFields.every(field => {
+        const fk = fieldKey('Genomic_Variant_umbrella', field + '[' + vi + ']');
+        return checkedFields.has(fk);
+      });
+      const isReviewed = unreviewedFields.length === 0;
+
       tr.innerHTML = `
-        <td><input type="checkbox" class="field-checkbox"></td>
+        <td><input type="checkbox" class="field-checkbox" ${isReviewed ? 'disabled style="opacity:0.3"' : ''} ${allChecked ? 'checked' : ''} onchange="window.app.handleVariantCheck(${vi}, this)"></td>
         <td class="gene-cell">${escHtml(v.gene_studied || '—')}</td>
         <td class="result-cell ${isDetected ? 'result-detected' : 'result-not-detected'}">${escHtml(v.result || '—')}</td>
         <td class="change-cell">${escHtml(v.coding_dna_change || '—')}</td>
@@ -314,17 +333,39 @@
     (variant.provenance || []).forEach(p => { provMap[p.field_name] = p; });
     const fields = Object.keys(variant).filter(k => k !== 'provenance' && k !== 'hgvs_normalized' && k !== 'needs_review' && k !== 'review_reason');
 
+    const unreviewedFields = fields.filter(field => {
+      const fk = fieldKey('Genomic_Variant_umbrella', field + '[' + vi + ']');
+      const dec = fieldDecisions[fk];
+      return !(dec && (dec.status === 'accepted' || dec.status === 'corrected'));
+    });
+    const allChecked = unreviewedFields.length > 0 && unreviewedFields.every(field => {
+      const fk = fieldKey('Genomic_Variant_umbrella', field + '[' + vi + ']');
+      return checkedFields.has(fk);
+    });
+    const isAllReviewed = unreviewedFields.length === 0;
+
     let html = `<div class="variant-detail-panel">
       <h3><span class="detail-icon">✎</span> Field-level Review (Variant #${vi + 1}: ${escHtml(variant.gene_studied || '')})</h3>
       ${variant.needs_review ? `<div style="padding:8px 12px;background:var(--amber-bg);border-radius:var(--r-sm);margin-bottom:12px;font-size:.78rem;color:#92400E;font-weight:600">⚠ ${escHtml(variant.review_reason || 'This variant needs SME review')}</div>` : ''}
-      <table class="variant-fields-table"><tbody>`;
+      <table class="variant-fields-table">
+        <thead>
+          <tr>
+            <th style="width:30px;padding:6px 12px;text-align:left"><input type="checkbox" class="field-checkbox" ${isAllReviewed ? 'disabled style="opacity:0.3"' : ''} ${allChecked ? 'checked' : ''} onchange="window.app.toggleSelectAll(this)"></th>
+            <th style="padding:6px 12px;text-align:left;font-size:0.7rem;text-transform:uppercase;color:var(--g500)">Field</th>
+            <th style="padding:6px 12px;text-align:left;font-size:0.7rem;text-transform:uppercase;color:var(--g500)">Value</th>
+            <th style="width:100px;padding:6px 12px;text-align:center;font-size:0.7rem;text-transform:uppercase;color:var(--g500)">Action</th>
+          </tr>
+        </thead>
+        <tbody>`;
 
     fields.forEach(field => {
       const val = variant[field];
       const fk = fieldKey('Genomic_Variant_umbrella', field + '[' + vi + ']');
       const dec = fieldDecisions[fk];
+      const isFieldReviewed = dec && (dec.status === 'accepted' || dec.status === 'corrected');
       const displayVal = dec && dec.status === 'corrected' ? dec.correctedValue : (val !== null ? String(val) : null);
       html += `<tr${dec ? (dec.status === 'accepted' ? ' class="row-accepted"' : ' class="row-corrected"') : ''}>
+        <td><input type="checkbox" class="field-checkbox" ${isFieldReviewed ? 'disabled style="opacity:0.3"' : ''} ${checkedFields.has(fk) ? 'checked' : ''} onchange="window.app.handleFieldCheck('${escAttr(fk)}', this)"></td>
         <td class="vf-name">${escHtml(field)}</td>
         <td class="vf-value ${displayVal === null ? 'null' : ''}">${displayVal !== null ? escHtml(displayVal).substring(0,150) : '—'}</td>
         <td class="vf-actions">${renderFieldActions(fk)}</td>
@@ -334,10 +375,10 @@
     area.innerHTML = html;
 
     // Wire up click on field rows for provenance highlight
-    area.querySelectorAll('.variant-fields-table tr').forEach((tr, fi) => {
+    area.querySelectorAll('.variant-fields-table tbody tr').forEach((tr, fi) => {
       tr.style.cursor = 'pointer';
       tr.addEventListener('click', (e) => {
-        if (e.target.tagName === 'BUTTON') return;
+        if (e.target.tagName === 'BUTTON' || e.target.type === 'checkbox') return;
         const field = fields[fi];
         const prov = provMap[field] || {};
         selectedField = { field, prov, value: variant[field] };
@@ -378,10 +419,26 @@
       const isActive = bi === activeBiomarkerIdx;
       const resultLower = (bm.result || '').toLowerCase();
       const isPositive = resultLower.includes('positive') || resultLower.includes('high') || resultLower.includes('detected');
+
+      const fields = Object.keys(bm).filter(k => k !== 'provenance' && k !== 'needs_review' && k !== 'review_reason');
+      const unreviewedFields = fields.filter(field => {
+        const fk = fieldKey('other_molecular_biomarker_umbrella', field + '[' + bi + ']');
+        const dec = fieldDecisions[fk];
+        return !(dec && (dec.status === 'accepted' || dec.status === 'corrected'));
+      });
+      const allChecked = unreviewedFields.length > 0 && unreviewedFields.every(field => {
+        const fk = fieldKey('other_molecular_biomarker_umbrella', field + '[' + bi + ']');
+        return checkedFields.has(fk);
+      });
+      const isReviewed = unreviewedFields.length === 0;
+
       html += `
         <div class="biomarker-card ${isActive ? 'active-card' : ''}" data-bi="${bi}">
-          <div class="biomarker-card-header">
-            <span class="bm-name">${escHtml(bm.biomarker_name || 'Unknown')}${bm.needs_review ? ' <span class="review-flag">⚠ Review</span>' : ''}</span>
+          <div class="biomarker-card-header" style="gap: 10px;">
+            <div style="display:flex;align-items:center;gap:8px">
+              <input type="checkbox" class="field-checkbox" ${isReviewed ? 'disabled style="opacity:0.3"' : ''} ${allChecked ? 'checked' : ''} onchange="window.app.handleBiomarkerCheck(${bi}, this, event)">
+              <span class="bm-name">${escHtml(bm.biomarker_name || 'Unknown')}${bm.needs_review ? ' <span class="review-flag">⚠ Review</span>' : ''}</span>
+            </div>
             <span class="bm-method">${escHtml(bm.method || '—')}</span>
           </div>
           <div class="biomarker-card-body">
@@ -396,7 +453,8 @@
 
     // Wire card clicks
     container.querySelectorAll('.biomarker-card').forEach(card => {
-      card.addEventListener('click', () => {
+      card.addEventListener('click', (e) => {
+        if (e.target.type === 'checkbox') return;
         const bi = parseInt(card.dataset.bi);
         activeBiomarkerIdx = bi === activeBiomarkerIdx ? -1 : bi;
         renderBiomarkerView(container);
@@ -414,16 +472,38 @@
     (bm.provenance || []).forEach(p => { provMap[p.field_name] = p; });
     const fields = Object.keys(bm).filter(k => k !== 'provenance' && k !== 'needs_review' && k !== 'review_reason');
 
+    const unreviewedFields = fields.filter(field => {
+      const fk = fieldKey('other_molecular_biomarker_umbrella', field + '[' + bi + ']');
+      const dec = fieldDecisions[fk];
+      return !(dec && (dec.status === 'accepted' || dec.status === 'corrected'));
+    });
+    const allChecked = unreviewedFields.length > 0 && unreviewedFields.every(field => {
+      const fk = fieldKey('other_molecular_biomarker_umbrella', field + '[' + bi + ']');
+      return checkedFields.has(fk);
+    });
+    const isAllReviewed = unreviewedFields.length === 0;
+
     let html = `<div class="variant-detail-panel">
       <h3><span class="detail-icon">✎</span> Field-level Review: ${escHtml(bm.biomarker_name || '')}</h3>
       ${bm.needs_review ? `<div style="padding:8px 12px;background:var(--amber-bg);border-radius:var(--r-sm);margin-bottom:12px;font-size:.78rem;color:#92400E;font-weight:600">⚠ ${escHtml(bm.review_reason || 'Needs SME review')}</div>` : ''}
-      <table class="variant-fields-table"><tbody>`;
+      <table class="variant-fields-table">
+        <thead>
+          <tr>
+            <th style="width:30px;padding:6px 12px;text-align:left"><input type="checkbox" class="field-checkbox" ${isAllReviewed ? 'disabled style="opacity:0.3"' : ''} ${allChecked ? 'checked' : ''} onchange="window.app.toggleSelectAll(this)"></th>
+            <th style="padding:6px 12px;text-align:left;font-size:0.7rem;text-transform:uppercase;color:var(--g500)">Field</th>
+            <th style="padding:6px 12px;text-align:left;font-size:0.7rem;text-transform:uppercase;color:var(--g500)">Value</th>
+            <th style="width:100px;padding:6px 12px;text-align:center;font-size:0.7rem;text-transform:uppercase;color:var(--g500)">Action</th>
+          </tr>
+        </thead>
+        <tbody>`;
     fields.forEach(field => {
       const val = bm[field];
       const fk = fieldKey('other_molecular_biomarker_umbrella', field + '[' + bi + ']');
       const dec = fieldDecisions[fk];
       const displayVal = dec && dec.status === 'corrected' ? dec.correctedValue : (val !== null ? String(val) : null);
+      const isFieldReviewed = dec && (dec.status === 'accepted' || dec.status === 'corrected');
       html += `<tr${dec ? (dec.status === 'accepted' ? ' class="row-accepted"' : ' class="row-corrected"') : ''}>
+        <td><input type="checkbox" class="field-checkbox" ${isFieldReviewed ? 'disabled style="opacity:0.3"' : ''} ${checkedFields.has(fk) ? 'checked' : ''} onchange="window.app.handleFieldCheck('${escAttr(fk)}', this)"></td>
         <td class="vf-name">${escHtml(field)}</td>
         <td class="vf-value ${displayVal === null ? 'null' : ''}">${displayVal !== null ? escHtml(displayVal) : '—'}</td>
         <td class="vf-actions">${renderFieldActions(fk)}</td>
@@ -432,10 +512,10 @@
     html += '</tbody></table></div>';
     area.innerHTML = html;
 
-    area.querySelectorAll('.variant-fields-table tr').forEach((tr, fi) => {
+    area.querySelectorAll('.variant-fields-table tbody tr').forEach((tr, fi) => {
       tr.style.cursor = 'pointer';
       tr.addEventListener('click', (e) => {
-        if (e.target.tagName === 'BUTTON') return;
+        if (e.target.tagName === 'BUTTON' || e.target.type === 'checkbox') return;
         const field = fields[fi];
         const prov = provMap[field] || {};
         selectedField = { field, prov, value: bm[field] };
@@ -485,19 +565,41 @@
       html += '</div></div>';
     }
 
+    const unreviewedFields = reviewFields.filter(field => {
+      const fk = fieldKey('tested_biomarker_umbrella', field);
+      const dec = fieldDecisions[fk];
+      return !(dec && (dec.status === 'accepted' || dec.status === 'corrected'));
+    });
+    const allChecked = unreviewedFields.length > 0 && unreviewedFields.every(field => {
+      const fk = fieldKey('tested_biomarker_umbrella', field);
+      return checkedFields.has(fk);
+    });
+    const isAllReviewed = unreviewedFields.length === 0;
+
     // Field-level review table
     html += `<div class="variant-detail-panel" style="margin:12px">
-      <h3><span class="detail-icon">\u270e</span> Field-level Review</h3>
-      <table class="variant-fields-table"><tbody>`;
+      <h3><span class="detail-icon">✎</span> Field-level Review</h3>
+      <table class="variant-fields-table">
+        <thead>
+          <tr>
+            <th style="width:30px;padding:6px 12px;text-align:left"><input type="checkbox" class="field-checkbox" ${isAllReviewed ? 'disabled style="opacity:0.3"' : ''} ${allChecked ? 'checked' : ''} onchange="window.app.toggleSelectAll(this)"></th>
+            <th style="padding:6px 12px;text-align:left;font-size:0.7rem;text-transform:uppercase;color:var(--g500)">Field</th>
+            <th style="padding:6px 12px;text-align:left;font-size:0.7rem;text-transform:uppercase;color:var(--g500)">Value</th>
+            <th style="width:100px;padding:6px 12px;text-align:center;font-size:0.7rem;text-transform:uppercase;color:var(--g500)">Action</th>
+          </tr>
+        </thead>
+        <tbody>`;
     reviewFields.forEach(field => {
       const val = section[field];
       const displayVal = Array.isArray(val) ? val.join(', ') : (val !== null ? String(val) : null);
       const fk = fieldKey('tested_biomarker_umbrella', field);
       const dec = fieldDecisions[fk];
       const shownVal = dec && dec.status === 'corrected' ? dec.correctedValue : displayVal;
+      const isFieldReviewed = dec && (dec.status === 'accepted' || dec.status === 'corrected');
       html += `<tr${dec ? (dec.status === 'accepted' ? ' class="row-accepted"' : ' class="row-corrected"') : ''}>
+        <td><input type="checkbox" class="field-checkbox" ${isFieldReviewed ? 'disabled style="opacity:0.3"' : ''} ${checkedFields.has(fk) ? 'checked' : ''} onchange="window.app.handleFieldCheck('${escAttr(fk)}', this)"></td>
         <td class="vf-name">${escHtml(field)}</td>
-        <td class="vf-value ${shownVal === null ? 'null' : ''}">${shownVal !== null ? escHtml(shownVal) : '\u2014'}</td>
+        <td class="vf-value ${shownVal === null ? 'null' : ''}">${shownVal !== null ? escHtml(shownVal) : '—'}</td>
         <td class="vf-actions">${renderFieldActions(fk)}</td>
       </tr>`;
     });
@@ -790,7 +892,9 @@
       document.querySelectorAll('.section-tab').forEach(t => t.classList.toggle('active', t.dataset.section === section));
       currentSection = section;
       selectedField = null;
+      checkedFields.clear();
       renderExtractionTable();
+      updateBulkActionBar();
     }
 
     // 2) Resolve where it lives in the PDF (vmaw citation → provenance → text).
