@@ -1,4 +1,4 @@
-# Column → JSON-path mapping for the 20-column evaluation workbook.
+# Column → JSON-path mapping for the 22-column evaluation workbook.
 #
 # Each column declares its source field per logical section. An empty string
 # means "leave the cell blank for this section". This file is the ONLY
@@ -31,6 +31,12 @@ columns:
 
   - header: "Reference Range"
     sources: { variants: "",                                 biomarkers: reference_range }
+
+  - header: "Analyte"
+    sources: { variants: "",                                 biomarkers: analyte }
+
+  - header: "Genotype"
+    sources: { variants: "",                                 biomarkers: genotype }
 
   - header: "Variant Allele Freq"
     sources: { variants: variant_allele_frequency,           biomarkers: "" }
