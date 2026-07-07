@@ -21,7 +21,7 @@
 .PHONY: help setup install install-phase2 venv \
         verify verify-cloud verify-phase2 verify-phase3 \
         lint lint-fix format typecheck test test-cov \
-        run-local score to-production ui portal snapshot \
+        run-local run-batch score to-production ui portal snapshot \
         clean clean-cache clean-venv
 
 # ----- variables --------------------------------------------------------------
@@ -118,6 +118,13 @@ run-local:  ## Run the pipeline on one PDF — usage: make run-local PDF=gs://..
 	  *)      FLAG=--local-pdf ;; \
 	esac; \
 	$(PY) scripts/process_local.py $$FLAG "$(PDF)" --version v$(PHASE)
+
+run-batch:  ## Run every PDF under a GCS prefix — usage: make run-batch BUCKET=gs://.../ [VERSION=v4] [LIMIT=N]
+	@if [ -z "$(BUCKET)" ]; then \
+	  echo "Usage: make run-batch BUCKET=gs://patient_clinical_trial/patient_profiles/ [VERSION=v4] [LIMIT=N]"; \
+	  exit 1; \
+	fi
+	$(PY) scripts/process_local.py --list-bucket "$(BUCKET)" --version $(if $(VERSION),$(VERSION),v$(PHASE)) $(if $(LIMIT),--limit $(LIMIT),)
 
 score:  ## Score an extraction against ground_truth — usage: make score DOC=demo [EXTRACTION=path.json] [THRESHOLD=0.80]
 	@if [ -z "$(DOC)" ]; then \
