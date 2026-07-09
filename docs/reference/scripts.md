@@ -7,7 +7,7 @@ and data-prep). The **regression gates** live separately in `scripts/gates/` —
 
 | Script | Make target | What it does |
 |---|---|---|
-| `process_local.py` | `make run-local PDF=… PHASE=…` | The local runner. Drives a PDF through the selected graph (v2 / v3) end-to-end and writes artifacts to `local_runs/artifacts/<doc_id>/`. `--json` emits the extraction envelope (e.g. the `demo_v2.json` dump) for scoring. |
+| `process_local.py` | `make run-local PDF=… PHASE=…` | The local runner. Drives a PDF through the selected graph (v2 / v3 / v4 — set `PHASE=4` for the v4 self-correcting run) end-to-end and writes artifacts to `local_runs/artifacts/<doc_id>/`. `--json` emits the extraction envelope (e.g. the `demo_v2.json` dump) for scoring. |
 | `score_against_ground_truth.py` | — | Scores an extraction envelope against a `ground_truth/*.json` fixture (per-section P/R/F1; supports `--all-sections` with an `--extraction-file`). Excludes `provenance` from scoring. |
 | `to_production.py` | `make to-production DOC=…` | Converts a saved extraction to the production schema via `transform/to_production.py`; writes `extraction_production.json`. (graph_selfcorrecting also auto-emits this on committed runs.) |
 | `snapshot_phase.py` | — | Snapshots a phase's artifacts/state into `snapshots/` (committed) for a frozen reference point. |

@@ -85,24 +85,29 @@ migration log + locked decisions: [`docs/migration/genomic_pathology_v4_plan.md`
 | Coverage Auditor base | `config/prompts/system/coverage_auditor.j2` | every team's CoverageAuditor |
 | Arbiter base | `config/prompts/system/arbiter.j2` | every team's Arbiter |
 | Metadata team | `config/prompts/metadata_team.j2` | metadata_team |
-| Molecular biomarker team | `config/prompts/molecular_biomarker_team.j2` | molecular_biomarker_team (incl. variant rules) |
+| Molecular biomarker team | `config/prompts/molecular_biomarker_team_v4.j2` | flat biomarkers only (variants routed away) |
 | Tested biomarker team | `config/prompts/tested_biomarker_team.j2` | tested_biomarker_team |
 | Specimen findings team | `config/prompts/specimen_findings_team.j2` | specimen_findings_team |
 | Clinical info team | `config/prompts/clinical_info_team.j2` | clinical_info_team |
 | Block profiler | `config/prompts/preprocess/block_profiler.j2` | `preprocess/block_profiler.py` |
 | Medical NER | `config/prompts/preprocess/medical_ner.j2` | `preprocess/medical_ner.py` |
-| Genomic variant team (RETIRED) | `config/prompts/genomic_variant_team.j2` | none — merged into biomarker team |
+| Genomic variant team | `config/prompts/genomic_variant_team.j2` | separate variants team (v4) |
 
 ## Typed registries / maps — where they live
 
 | Concern | Config | Code |
 |---|---|---|
-| Cross-section link types | `config/link_registry.yaml` | `agents/link_registry.py`, `agents/linker.py` |
+| Cross-section link types (v3) | `config/link_registry.yaml` | `agents/link_registry.py`, `agents/linker.py` |
+| Cross-section link types (v4) | `config/link_registry_v4.yaml` | `agents/link_registry.py`, `agents/linker.py`, `pipeline/graph_linear.py` |
+| Dedup policy (cross-section + intra-section) | `config/dedup_policy.yaml` | `agents/linker.py` (`_apply_intra_section_dedup`) |
+| Section shape table | `config/section_layout.yaml` | `agents/linker.py`, scoring |
 | Owner-keyed attribution | `config/attribution_map.yaml` | `verification/attribution.py` |
 | Renormalization targets | `config/normalizer_map.yaml` | `agents/normalizer_hooks.py`, `verification/normalization.py`, `preprocess/normalizers.py` |
-| NER → umbrella routing | `config/ner_mapping.yaml` | `preprocess/medical_ner.py` |
+| NER → umbrella routing (v3) | `config/ner_mapping.yaml` | `preprocess/medical_ner.py` |
+| NER → umbrella routing (v4) | `config/ner_mapping_v4.yaml` | `preprocess/medical_ner.py` |
 | Recall-floor rules | `config/recall_floor.yaml` | `verification/recall_floor.py` |
 | Production mapping | `config/production_mapping.yaml` | `transform/to_production.py` |
-| Team registry | `config/teams.yaml` | `teams/section_team.py` |
+| Team registry (v3) | `config/teams.yaml` | `teams/section_team.py` |
+| Team registry (v4) | `config/teams_v4.yaml` | `teams/section_team.py`, `pipeline/runner.py` |
 | Tool registry | `config/tools.yaml` | `core/tool_registry.py` |
 | Seed dictionaries | `config/data/{biomarker_synonyms,method_synonyms}.yaml`, `hgnc_aliases.tsv` | `preprocess/{normalizers,hgnc_resolver}.py` |

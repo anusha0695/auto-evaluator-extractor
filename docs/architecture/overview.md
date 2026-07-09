@@ -112,7 +112,7 @@ adjudicator when `LLM_ADJUDICATORS` is on, else marked `uncertain` and escalated
 `run_verifier_suite` (in `pipeline/graph_linear.py`) runs, in order, and appends one
 scorecard each:
 
-1. **schema_validator** — the envelope validates against the v3 Pydantic models.
+1. **schema_validator** — the envelope validates against the v4 Pydantic models.
 2. **CoverageVerifier** — extracted coverage vs the NER hypothesis (gap tolerance).
 3. **LinkConsistencyVerifier** — the links are internally consistent.
 4. **EvidenceConfidenceVerifier** — confidence/grounding sanity.

@@ -390,11 +390,27 @@ a variant never links to itself.
 
 **Step 3 — Dedup** (`config/dedup_policy.yaml`):
 
-When the same gene appears in BOTH `Genomic_Variant_umbrella` and
-`other_molecular_biomarker_umbrella`, the canonical owner wins. The policy
-says: a record with a structural `coding_dna_change` / `protein_change`
-belongs to `Genomic_Variant_umbrella`; if the biomarker team picked up the
-same gene, that record is dropped from the biomarker section.
+The linker runs **two dedup passes**:
+
+*Cross-section (owner-wins).* When the same gene appears in BOTH
+`Genomic_Variant_umbrella` and `other_molecular_biomarker_umbrella`, the
+canonical owner wins. The policy says: a record with a structural
+`coding_dna_change` / `protein_change` belongs to `Genomic_Variant_umbrella`;
+if the biomarker team picked up the same gene, that record is dropped from
+the biomarker section.
+
+*Intra-section (identity-collapse).* Under `within_section:` the policy
+declares an identity — for `Genomic_Variant_umbrella`,
+`identity_keys: [gene_key, amino_acid_change]`. `_apply_intra_section_dedup`
+walks each section and groups records by that identity:
+- Same-identity records with **identical** non-identity fields → drop the
+  duplicates.
+- Same-identity records with **conflicting** non-identity fields → keep the
+  winner (higher `page_number`) and emit a `variant_superseded_by` link from
+  loser→winner into `envelope["links"]`. Downstream,
+  `transform/to_production._apply_supersession_filter` reads those links and
+  removes the superseded record from the production output (the internal
+  envelope keeps both, for audit).
 
 Each dedup drop emits a trace record:
 ```

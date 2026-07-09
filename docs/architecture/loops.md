@@ -50,7 +50,7 @@ Code: `teams/section_team.py` (skeleton), `agents/coverage_auditor.py`,
 ## 2. Ping-back / repair loop (graph-level, the auto-fix)
 
 Code: `pipeline/triage.py` (classify + decide), `pipeline/repair.py` (apply),
-`pipeline/graph_v3.py` (the `repair → linker` edge + the `triage` conditional edge).
+`pipeline/graph_selfcorrecting.py` (the `repair → linker` edge + the `triage` conditional edge).
 
 ![Ping-back / repair loop with conditions](images/pingback_repair_loop.png)
 
@@ -113,7 +113,7 @@ via `_ADDRESSABLE` and emits a repair request.
   once hit, remaining defects escalate.
 - **Queue dedup**: the SME queue is deduplicated by `(kind, ref, section, detail)` so a
   standing defect re-detected across cycles is not double-counted.
-- **Recursion backstop**: `GRAPH_V3_RECURSION_LIMIT` guarantees the LangGraph loop ends
+- **Recursion backstop**: `GRAPH_RECURSION_LIMIT` guarantees the LangGraph loop ends
   even if the budget logic were misconfigured.
 
 When triage finds no addressable defect, `route = "done"` and control moves to **VMAW**

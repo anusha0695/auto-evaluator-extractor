@@ -11,7 +11,7 @@ config that drives it, and — for the verifiers — exactly what it checks. Use
 
 | File | Responsibility |
 |---|---|
-| `schema_loader.py` | Generates Pydantic models from `config/schemas/genomic_pathology_v3.json` at runtime; section-flexible (v2 or v3). Single source of truth for shapes. |
+| `schema_loader.py` | Generates Pydantic models from `config/schemas/genomic_pathology_v4.json` at runtime; section-flexible (v2 / v3 / v4). Single source of truth for shapes. |
 | `prompt_renderer.py` | Renders Jinja prompts — composes a team prompt with the base `system/` role prompts. |
 | `state.py` | The shared graph-state definition + the section literals. |
 | `persistence.py` | Reads/writes run artifacts to the configured backend (local dir; GCS optional). `load_storage_config("phase_1")` etc. |
@@ -48,8 +48,8 @@ PDF → the block layer everything else reads.
 | `coverage_auditor.py` | Compares extractor output to the `parser_hypothesis`; raises `gap_signal` + lists missed/spurious fields. Prompt: `system/coverage_auditor.j2`. |
 | `arbiter.py` | Resolves Extractor↔Auditor disputes; emits per-field re-extract hints. Prompt: `system/arbiter.j2`. |
 | `planner.py` | Deterministic planner — picks `active_team_keys` from document signals (skips teams with no relevant blocks). |
-| `linker.py` | Assembles the nested envelope; forms cross-section links over the typed registry; supersession detection; accepts `relink_hints` from the repair loop. |
-| `link_registry.py` + `config/link_registry.yaml` | The typed link catalogue (Tier 1/2 cross-ref types; Tier-3 clinical links are config-toggleable). |
+| `linker.py` | Assembles the nested envelope; forms cross-section links over the typed registry; supersession detection; accepts `relink_hints` from the repair loop. Also runs **intra-section dedup** via `_apply_intra_section_dedup` (with `_canon_change` + `_HGVS_PREFIX_RE`) — the field-agnostic reconciler that collapses multiple variant records at the same identity (e.g. KRAS p.G12D restated on two pages with different VAFs). Rules live in `config/dedup_policy.yaml` under `within_section:`. |
+| `link_registry.py` + `config/link_registry_v4.yaml` | The typed link catalogue (Tier 1/2 cross-ref types; Tier-3 clinical links are config-toggleable). |
 | `link_binding_verifier.py` | The four binding checks V1–V4 (see §5). |
 | `adjudicators.py` | All the LLM hooks, lazily built and gated by `LLM_ADJUDICATORS`: `build_llm_adjudicators` (relationship/link/supersession/merge confirm), `build_attribution_fn`, `build_vmaw_hooks` (EC/CITE/VA), `build_recall_reread_fn`, `build_triage_llm`. |
 | `normalizer_hooks.py` + `config/normalizer_map.yaml` | The renormalize adapter used by the repair loop. |
@@ -57,14 +57,19 @@ PDF → the block layer everything else reads.
 ## 4. Teams (`teams/`)
 
 - `section_team.py` — the **factory** that builds the 3-agent skeleton (Extractor →
-  CoverageAuditor → Arbiter → re-extract) for any section, from `config/teams.yaml`.
+  CoverageAuditor → Arbiter → re-extract) for any section, from `config/teams_v4.yaml`.
 - `metadata_team.py` — the hand-written Phase-1 metadata team.
-- The five active teams and their sections (from `config/teams.yaml`):
-  `metadata_team`→`report_metadata`, `molecular_biomarker_team`→`other_molecular_biomarker_umbrella`,
-  `tested_biomarker_team`→`tested_biomarker_umbrella`, `clinical_info_team`→`clinical_information`,
-  `specimen_findings_team`→`significant_findings`.
-- Team prompts: `config/prompts/<team>.j2`. (`genomic_variant_team.j2` is retired —
-  variants merged into the biomarker team.)
+- The four active v4 teams and their sections (from `config/teams_v4.yaml`):
+  `metadata_team`→`report_metadata`, `genomic_variant_team`→`Genomic_Variant_umbrella`,
+  `molecular_biomarker_team`→`other_molecular_biomarker_umbrella`,
+  `tested_biomarker_team`→`tested_biomarker_umbrella`.
+  `specimen_findings_team`→`significant_findings` and
+  `clinical_info_team`→`clinical_information` are carried non-destructively as
+  `enabled: false` in v4.
+- Team prompts: `config/prompts/<team>.j2`. In v4 the biomarker team's prompt is
+  `molecular_biomarker_team_v4.j2` (flat biomarkers — no variant rules); the
+  revived `genomic_variant_team.j2` owns `Genomic_Variant_umbrella` as a separate
+  team and variants are routed AWAY from the biomarker team.
 - Model assignments are per team (extractor/auditor = gemini-2.5-pro, arbiter =
   gemini-2.5-flash), temperature locked at 0.0, with a per-team `tool_allowlist`.
 
@@ -75,13 +80,14 @@ scorecard `{verifier_name, passed, field_errors/notes}`.
 
 | Verifier | File | What it checks |
 |---|---|---|
-| **schema_validator** | `verification/schema_validator.py` | Envelope validates against the v3 Pydantic models; reports field-level errors with `loc`. |
+| **schema_validator** | `verification/schema_validator.py` | Envelope validates against the v4 Pydantic models; reports field-level errors with `loc`. |
 | **CoverageVerifier** | `verification/core_verifiers.py` | Extracted coverage vs NER hypothesis count beyond gap tolerance. |
 | **LinkConsistencyVerifier** | `verification/core_verifiers.py` | The links are internally consistent (endpoints exist, types valid). |
 | **EvidenceConfidenceVerifier** | `verification/core_verifiers.py` | Confidence / grounding sanity per record. |
 | **RecallFloorVerifier** | `verification/recall_floor.py` | Block-role recall floor: a block whose role implies a field (e.g. a `synoptic_report` block ⇒ a stage) but nothing extracted → a miss. Loud vs quiet strictness from `config/recall_floor.yaml`. An optional AI re-read (`build_recall_reread_fn`) can only *confirm* a miss — offline/no-text it keeps the miss (never silently clears). |
 | **AttributionVerifier** | `verification/attribution.py` | Owner-keyed attribution: an attribute is anchored to the correct owner via the owner key (e.g. `specimen_id`), positional fallback when the key is null. Multiplicity is a scrutiny signal, not a gate. Map: `config/attribution_map.yaml`. |
 | **NormalizationVerifier** | `verification/normalization.py` | The canonical/normalized value matches the verbatim; canonical written only when matched + different. Map: `config/normalizer_map.yaml`. |
+| **HGVSValidityVerifier** | `verification/hgvs_validity.py` (`find_malformed_hgvs`) | HGVS structural-validity floor (V4-M2c/M6): every `coding_dna_change` / `protein_change` / `genomic_change` must be HGVS-syntactically valid (missing `c.`/`p.` prefix, garbled OCR → flag). |
 | **LinkBindingVerifier V1–V4** | `agents/link_binding_verifier.py` | Evidence-grounded binding (below). |
 
 ### The four binding checks
@@ -133,7 +139,10 @@ value picks for the SME; drops ungroundable "no-support" kinds (`binding_refuted
   per-team `auto_accept_confidence_threshold`; partial if some sections are clean and
   others escalated; else auto-accept.
 - `transform/to_production.py` — internal envelope → production schema (reshape, fold,
-  filter). See [schema.md §6](schema.md#6-production-mapping-transformto_productionpy).
+  filter). Includes `_apply_supersession_filter`, which reads `envelope["links"]` and
+  drops variant records that have a `variant_superseded_by` link to a winner (the
+  loser is removed from the production output; the internal envelope keeps both for
+  audit). See [schema.md §6](schema.md#6-production-mapping-transformto_productionpy).
 
 ## 9. UI (`ui/phase1/`)
 
@@ -154,16 +163,21 @@ A Streamlit review app. Key pieces:
 
 | File | Drives |
 |---|---|
-| `config/schemas/genomic_pathology_v3.json` | the schema (Pydantic generation + structured-output spec) |
-| `config/teams.yaml` | the 5 teams: section binding, prompt template, models, tool allowlist, thresholds |
+| `config/schemas/genomic_pathology_v4.json` | the schema (Pydantic generation + structured-output spec) |
+| `config/teams_v4.yaml` | the v4 team registry: section binding, prompt template, models, tool allowlist, thresholds, `enabled` flag |
+| `config/teams.yaml` | the legacy v3 team registry (retained non-destructively) |
 | `config/tools.yaml` | the agent tool registry |
 | `config/prompts/system/*.j2` | base agent role prompts (extractor / coverage_auditor / arbiter) |
 | `config/prompts/<team>.j2` | per-team extraction rules |
 | `config/prompts/preprocess/*.j2` | block_profiler + medical_ner prompts |
-| `config/link_registry.yaml` | typed cross-section link types |
+| `config/link_registry_v4.yaml` | typed cross-section link types (v4) |
+| `config/link_registry.yaml` | typed cross-section link types (v3, retained) |
+| `config/dedup_policy.yaml` | intra-section and cross-section dedup rules (owner-wins + within-section identity) |
+| `config/section_layout.yaml` | per-section shape table (`record_array`, `gene_key_field`, `empty` placeholder) read by linker + scorer |
 | `config/attribution_map.yaml` | owner-keyed attribution targets |
 | `config/normalizer_map.yaml` | renormalize targets |
-| `config/ner_mapping.yaml` | NER → umbrella routing |
+| `config/ner_mapping_v4.yaml` | NER → umbrella routing (v4) |
+| `config/ner_mapping.yaml` | NER → umbrella routing (v3, retained) |
 | `config/recall_floor.yaml` | block-role → expected-field recall rules (loud/quiet) |
 | `config/production_mapping.yaml` | internal ref → production location |
 | `config/storage.yaml` | persistence backend config |
