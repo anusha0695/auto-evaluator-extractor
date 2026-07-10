@@ -45,8 +45,8 @@ PDF → the block layer everything else reads.
 |---|---|
 | `base.py` | Shared agent base (model binding, ReAct plumbing). |
 | `extractor.py` | The ReAct extractor: reasons, calls tools, emits Final-Answer JSON validated against the section model. Optional flag-gated `with_structured_output(method="json_schema")` finalizer (`EXTRACTOR_STRUCTURED=1`) with a free-text fallback; default is the free-text parse. Writes failing payloads to `local_runs/_extractor_debug/` for diagnosis. Base prompt: `config/prompts/system/extractor.j2`. |
-| `coverage_auditor.py` | Compares extractor output to the `parser_hypothesis`; raises `gap_signal` + lists missed/spurious fields. Prompt: `system/coverage_auditor.j2`. |
-| `arbiter.py` | Resolves Extractor↔Auditor disputes; emits per-field re-extract hints. Prompt: `system/arbiter.j2`. |
+| `coverage_auditor.py` | Compares extractor output to the `parser_hypothesis`; raises `gap_signal` + lists missed/spurious fields. Prompt: `config/prompts/system/coverage_auditor.j2`. |
+| `arbiter.py` | Resolves Extractor↔Auditor disputes; emits per-field re-extract hints. Prompt: `config/prompts/system/arbiter.j2`. |
 | `planner.py` | Deterministic planner — picks `active_team_keys` from document signals (skips teams with no relevant blocks). |
 | `linker.py` | Assembles the nested envelope; forms cross-section links over the typed registry; supersession detection; accepts `relink_hints` from the repair loop. Also runs **intra-section dedup** via `_apply_intra_section_dedup` (with `_canon_change` + `_HGVS_PREFIX_RE`) — the field-agnostic reconciler that collapses multiple variant records at the same identity (e.g. KRAS p.G12D restated on two pages with different VAFs). Rules live in `config/dedup_policy.yaml` under `within_section:`. |
 | `link_registry.py` + `config/link_registry_v4.yaml` | The typed link catalogue (Tier 1/2 cross-ref types; Tier-3 clinical links are config-toggleable). |
@@ -144,20 +144,91 @@ value picks for the SME; drops ungroundable "no-support" kinds (`binding_refuted
   loser is removed from the production output; the internal envelope keeps both for
   audit). See [schema.md §6](schema.md#6-production-mapping-transformto_productionpy).
 
-## 9. UI (`ui/phase1/`)
+## 9. UI (`ui/`)
 
-A Streamlit review app. Key pieces:
+The **SME Review Platform** — a Flask server plus a single-page HTML/JS app.
+Six files, no subdirectories. The Flask side is a pure data pipe from
+`local_runs/artifacts/` to the browser; all rendering logic lives client-side.
 
 | File | Role |
 |---|---|
-| `app.py` | Entry point; tabs/views. |
-| `data_layer.py` | Loads run artifacts (`load_artifact`, `load_extraction`). |
-| `block_view.py` | The per-block view model (bbox + text + role + entities + sourced fields). |
-| `evidence.py` | `enumerate_entities`, `field_rationale_map`, `iter_provenance`, `build_entity_payload` — turns the envelope into selectable, highlightable entities with their trace. |
-| `field_trace.py` | `assemble_field_trace` — one ordered timeline per field across phases: **extraction → linking → verification (incl. binding) → repair → resolution (VMAW)**. The `linking` phase surfaces each linker relationship touching the selected field with its rationale. |
-| `components/entity_explorer.py` | The canvas: page image + highlight boxes (translucent wash + a solid outline on the selected entity) + the collapsible trace panel. |
-| `views/` | `overview`, `preprocessing_view`, `metadata_extraction_view`, `extraction_v2_view`, `entity_browser_view`, `production_browser_view`, `sme_review_view`. |
-| `sme_decisions.py` | The SME review model + decision apply (immutable original, occurrences safe). |
+| `app.py` (Flask) | Serves `index.html` at `/`, static assets at `/<path>`, the doc list at `/api/docs` (scans `local_runs/artifacts/` for subdirs containing `extraction_v2.json` — no hardcoded list), and per-doc artifact files at `/artifacts/<doc_id>/<filename>` (`extraction_v2.json`, `agent_trace.json`, `escalation_queue.json`, etc.). Default port 8501, overrideable via `PORT`. |
+| `index.html` | Single HTML page with two top-level views: `#dashboardView` — the Extraction Queue table with 4 KPI stats (Total / Accepted / Escalated / Pending), a filter dropdown, and a table of docs; and `#documentView` — per-doc review with a left sidebar (Escalations + SME Decision + Reviewer name), a section-tab bar, an extraction table with per-field checkboxes and actions (bulk-select supported), and a field-detail panel that appears when a row is clicked. |
+| `app.js` | Main JS module (`window.app`). Fetches `/api/docs` on load and `/artifacts/<doc>/extraction_v2.json` + `/artifacts/<doc>/agent_trace.json` per doc. Key functions: `showDashboard`, `filterQueue`, `toggleSelectAll`, `renderFieldActions`, `renderFieldDetail`. |
+| `agent-trace.js` | Renders the per-field agent timeline in the detail panel. |
+| `pdf-viewer.js` | PDF viewer with page-highlight support. |
+| `styles.css` | All styling. |
+
+The per-doc view has four section tabs — `report_metadata`, `Genomic_Variant_umbrella`,
+`other_molecular_biomarker_umbrella`, `tested_biomarker_umbrella` — mirroring the four
+active v4 sections.
+
+**SME workflow (all client-side):** queue → pick a doc → pick a section tab → click a
+row → detail panel shows the field's provenance, evidence, and agent-trace timeline →
+apply an action (accept / edit / reject) which the reviewer records against their
+name. Nothing is server-side rendered; the Flask server never mutates state, it just
+serves the artifact JSON the pipeline wrote.
+
+### 9.1 Artifact source — local or GCS (runtime-configurable)
+
+`ui/app.py` supports two data sources through the same URL contract
+(`/api/docs` and `/artifacts/<doc>/<file>`). The browser is **source-agnostic**
+— nothing in `app.js` / `index.html` / the other JS files changes when the
+source is switched. Selection is one env-var toggle read at server startup:
+
+| Env var | Purpose | Default |
+|---|---|---|
+| `GCS_ARTIFACTS_BUCKET` | Set = GCS mode; unset/empty = local mode | `""` (= local) |
+| `GCS_ARTIFACTS_PREFIX` | Key prefix inside the bucket that contains per-doc folders | `artifacts/` |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Service-account JSON path for the GCS client | (uses ADC if unset — optional on GKE / Cloud Run with Workload Identity) |
+| `PORT` | Server port | `8501` |
+
+**Local mode (default).** When `GCS_ARTIFACTS_BUCKET` is unset, `list_docs()`
+walks `local_runs/artifacts/` for subfolders that contain `extraction_v2.json`,
+and `serve_artifact()` streams files from `local_runs/artifacts/<doc>/<file>`.
+This is today's behavior — no code change for existing local dev.
+
+**GCS mode.** When `GCS_ARTIFACTS_BUCKET` is set, `list_docs()` calls
+`storage.Client().bucket(BUCKET).list_blobs(prefix=BUCKET_PREFIX)` and groups
+blob names into `{doc_id}/{filename}` pairs. A doc appears in the queue when
+its `extraction_v2.json` blob exists; `hasPdf` reflects presence of
+`source.pdf`. Individual artifact fetches (`serve_artifact()`) route through
+`_bucket().blob(...).download_as_bytes()` and stream the bytes back with the
+same `_MIME_MAP` used by the local branch.
+
+The GCS `Client()` is **lazy-initialized** the first time it's needed —
+`google-cloud-storage` is not imported at process start when the toggle is
+off, so an operator running locally without gcloud credentials can still boot
+the server.
+
+**Path-traversal defense** runs BEFORE either backend is touched: `doc_id`
+may not contain `/` or `..`, and `filename` may not contain `..`. Requests
+that fail these checks return `HTTP 400` without ever hitting GCS or the
+filesystem.
+
+**Optimization note — signed URLs for large files.** The GCS branch currently
+buffers each blob into memory (`io.BytesIO(blob.download_as_bytes())`). Fine
+for the small JSON artifacts; noisy for large `source.pdf` files. If PDFs get
+big, generate a v4 signed URL and return a `302` redirect instead:
+
+```python
+if filename.endswith(".pdf"):
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(minutes=15),
+        method="GET",
+    )
+    return redirect(url)
+```
+
+Not wired today because the current artifacts are small enough; the pattern
+is here so the next maintainer knows where to add it if it becomes necessary.
+
+**Getting artifacts INTO GCS** is a separate concern — the UI reads wherever
+the operator points it. Two common patterns: (1) modify `core/persistence.py`
+so the pipeline writes to GCS directly; (2) keep writing to local disk during
+extraction and sync post-run with `gsutil -m rsync -r local_runs/artifacts/
+gs://<bucket>/artifacts/`. The UI change is independent of either choice.
 
 ## 10. Configuration index
 

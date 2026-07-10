@@ -13,8 +13,8 @@ condition-annotated diagrams in **[loops.md](loops.md)**.
 ## System design (deployment view)
 
 The actual GCP services and where the agent runtime sits. All model calls go to Vertex
-AI Gemini (BAA path); persistence and observability stay in-project; the Streamlit app
-reads the saved artifacts for SME review.
+AI Gemini (BAA path); persistence and observability stay in-project; the Flask +
+HTML/JS SPA (`ui/`) reads the saved artifacts for SME review.
 
 ![System design (GCP)](images/system_design.png)
 

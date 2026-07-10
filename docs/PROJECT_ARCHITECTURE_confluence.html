@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="generator" content="pandoc" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
-  <title>Project Architecture — Agentic Genomic / Pathology Extraction</title>
+  <title>Project Architecture</title>
   <style>
     code{white-space: pre-wrap;}
     span.smallcaps{font-variant: small-caps;}
@@ -13,93 +13,45 @@
     div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
     ul.task-list{list-style: none;}
   </style>
-
-<style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-           max-width: 900px; margin: 2em auto; padding: 0 1.5em; color: #172b4d;
-           line-height: 1.55; font-size: 14px; }
-    h1 { font-size: 2em; color: #0052cc; border-bottom: 2px solid #dfe1e6; padding-bottom: 0.3em; }
-    h2 { font-size: 1.5em; color: #0052cc; margin-top: 1.8em; }
-    h3 { font-size: 1.2em; color: #172b4d; margin-top: 1.4em; }
-    h4 { font-size: 1.05em; color: #42526e; }
-    p  { margin: 0.6em 0; }
-    code { background: #f4f5f7; padding: 2px 5px; border-radius: 3px;
-           font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size: 0.92em;
-           color: #172b4d; }
-    pre { background: #f4f5f7; padding: 1em; border-radius: 4px; overflow-x: auto;
-          font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size: 0.88em;
-          border-left: 4px solid #0052cc; line-height: 1.4; }
-    pre code { background: transparent; padding: 0; }
-    table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.92em; }
-    th, td { border: 1px solid #dfe1e6; padding: 8px 12px; text-align: left; vertical-align: top; }
-    th { background: #f4f5f7; font-weight: 600; color: #0052cc; }
-    tr:nth-child(even) td { background: #fafbfc; }
-    blockquote { border-left: 4px solid #dfe1e6; margin: 1em 0; padding: 0.3em 1em;
-                 color: #5e6c84; background: #fafbfc; }
-    ul, ol { padding-left: 1.5em; }
-    li { margin: 0.3em 0; }
-    hr { border: none; border-top: 1px solid #dfe1e6; margin: 2em 0; }
-    .mermaid { text-align: center; background: white; padding: 1em; border-radius: 4px;
-               border: 1px solid #dfe1e6; margin: 1em 0; }
-    #TOC { background: #fafbfc; border: 1px solid #dfe1e6; border-radius: 4px;
-           padding: 1em 1.5em; margin-bottom: 2em; }
-    #TOC ul { padding-left: 1.2em; }
-    a { color: #0052cc; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-</style>
-
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<script>
-  mermaid.initialize({ startOnLoad: true, theme: 'default', flowchart: { curve: 'basis' } });
-</script>
-
+<style>body{font-family:-apple-system,sans-serif;max-width:900px;margin:2em auto;padding:0 1.5em;color:#172b4d;line-height:1.55;font-size:14px}h1,h2{color:#0052cc}h1{border-bottom:2px solid #dfe1e6;padding-bottom:.3em}code{background:#f4f5f7;padding:2px 5px;border-radius:3px;font-family:monospace;font-size:.92em}pre{background:#f4f5f7;padding:1em;border-radius:4px;overflow-x:auto;font-size:.88em;border-left:4px solid #0052cc}table{border-collapse:collapse;width:100%;margin:1em 0}th,td{border:1px solid #dfe1e6;padding:8px 12px;text-align:left;vertical-align:top}th{background:#f4f5f7}.mermaid{text-align:center;background:white;padding:1em;border-radius:4px;border:1px solid #dfe1e6;margin:1em 0}</style><script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script><script>mermaid.initialize({startOnLoad:true,theme:"default"});</script>
 </head>
 <body>
 <header id="title-block-header">
-<h1 class="title">Project Architecture — Agentic Genomic / Pathology Extraction</h1>
+<h1 class="title">Project Architecture</h1>
 </header>
 <nav id="TOC" role="doc-toc">
 <ul>
+<li><a href="#project-architecture-agentic-genomic-pathology-extraction">Project Architecture — Agentic Genomic / Pathology Extraction</a></li>
 <li><a href="#contents">Contents</a></li>
-<li><a href="#what-the-system-does">1. What the system does</a></li>
-<li><a href="#the-60-second-mental-model">2. The 60-second mental model</a></li>
+<li><a href="#what-the-system-does">1. What the system does</a>
+<ul>
+<li><a href="#how-far-back-does-the-repair-reach-the-graph-edge-after-repair-is-always-repair-linker.-but-the-work-inside-the-repair-node-reaches-further-back-than-the-linker-reprofile_block-re-runs-the-blockprofiler-on-a-misrouted-block-a-preprocess-stage-agent-and-then-re-extracts-re_extract_team-re-runs-the-teams-extractorauditorarbiter.-so-although-the-graph-only-loops-back-to-the-linker-the-correction-effectively-reaches-back-as-far-as-the-blockprofiler-re-profile-a-block-re-extract-re-link-re-verify-re-triage."><strong>How far back does the repair reach?</strong> The GRAPH edge after repair is always repair → linker. But the WORK inside the repair node reaches further back than the linker: <strong>reprofile_block</strong> re-runs the BlockProfiler on a misrouted block (a preprocess-stage agent) and then re-extracts; <strong>re_extract_team</strong> re-runs the team’s Extractor/Auditor/Arbiter. So although the graph only loops back to the linker, the correction effectively reaches back as far as the BlockProfiler — re-profile a block → re-extract → re-link → re-verify → re-triage.</a></li>
+</ul></li>
 <li><a href="#repository-map-where-things-live">3. Repository map — where things live</a></li>
-<li><a href="#the-execution-lifecycle-entry-to-exit">4. The execution lifecycle — entry to exit</a>
+<li><a href="#the-execution-lifecycle-entry-to-exit">4. The execution lifecycle — entry to exit</a></li>
+<li><a href="#how-the-langgraph-is-constructed">5. How the LangGraph is constructed</a>
 <ul>
 <li><a href="#the-shared-state-object">5.1 The shared state object</a></li>
-<li><a href="#how-state-deltas-merge">5.2 How state deltas merge</a></li>
-<li><a href="#the-nodes-and-edges">5.3 The nodes and edges</a></li>
-<li><a href="#the-repair-loop-and-why-it-terminates">5.4 The repair loop and why it terminates</a></li>
-<li><a href="#the-checkpointer">5.5 The checkpointer</a></li>
-</ul></li>
-<li><a href="#the-eleven-nodes-purpose-and-mechanism">6. The eleven nodes — purpose and mechanism</a>
-<ul>
-<li><a href="#document_received">6.1 document_received</a></li>
-<li><a href="#preprocess-turn-a-pdf-into-reasoning-ready-structure">6.2 preprocess — turn a PDF into reasoning-ready structure</a></li>
-<li><a href="#planner-decide-which-teams-run">6.3 planner — decide which teams run</a></li>
-<li><a href="#teams-the-extraction-heavy-lifter">6.4 teams — the extraction heavy-lifter</a></li>
-<li><a href="#linker-assemble-one-envelope-find-relationships">6.5 linker — assemble one envelope + find relationships</a></li>
-<li><a href="#verifiers-check-everything-the-llms-produced">6.6 verifiers — check everything the LLMs produced</a></li>
-<li><a href="#triage-classify-and-route-every-defect">6.7 triage — classify and route every defect</a></li>
 <li><a href="#repair-apply-the-auto-fixes">6.8 repair — apply the auto-fixes</a></li>
-<li><a href="#vmaw-deep-resolve-what-auto-repair-couldnt">6.9 vmaw — deep-resolve what auto-repair couldn't</a></li>
+<li><a href="#vmaw-deep-resolve-what-auto-repair-couldnt">6.9 vmaw — deep-resolve what auto-repair couldn’t</a></li>
 <li><a href="#decision_router-the-final-verdict">6.10 decision_router — the final verdict</a></li>
 <li><a href="#persist-write-everything-to-disk">6.11 persist — write everything to disk</a></li>
 </ul></li>
 <li><a href="#agents-single-calls-and-rules">7. Agents, single calls, and rules</a></li>
-<li><a href="#the-configuration-system">8. The configuration system</a></li>
 <li><a href="#the-verification-suite-how-each-check-works">9. The verification suite — how each check works</a></li>
 <li><a href="#the-core-infrastructure-core">10. The core infrastructure (core/)</a>
 <ul>
 <li><a href="#schema_loader.py-json-schema-pydantic-at-runtime">10.1 schema_loader.py — JSON Schema → Pydantic at runtime</a></li>
 <li><a href="#prompt_renderer.py-jinja-prompt-assembly">10.2 prompt_renderer.py — Jinja prompt assembly</a></li>
-<li><a href="#tool_registry.py-the-extractors-tools">10.3 tool_registry.py — the Extractor's tools</a></li>
+<li><a href="#tool_registry.py-the-extractors-tools">10.3 tool_registry.py — the Extractor’s tools</a></li>
 <li><a href="#the-m2-normalization-toolkit-preprocess">10.4 The M2 normalization toolkit (preprocess/)</a></li>
 <li><a href="#persistence.py-checkpointer.py">10.5 persistence.py &amp; checkpointer.py</a></li>
 <li><a href="#the-scoring-evaluation-harness">10.6 The scoring / evaluation harness</a></li>
 </ul></li>
-<li><a href="#the-agent-trace-the-audit-spine">11. The agent trace — the audit spine</a></li>
-<li><a href="#the-sme-review-system">12. The SME review system</a></li>
+<li><a href="#the-agent-trace-the-audit-spine">11. The agent trace — the audit spine</a>
+<ul>
+<li><a href="#artifact-source-local-or-gcs-runtime-configurable">12.1 Artifact source — local or GCS (runtime-configurable)</a></li>
+</ul></li>
 <li><a href="#artifacts-written-per-run">13. Artifacts written per run</a></li>
 <li><a href="#extending-the-system">14. Extending the system</a></li>
 <li><a href="#testing-the-gate-suite">15. Testing — the gate suite</a></li>
@@ -107,83 +59,68 @@
 <li><a href="#glossary">17. Glossary</a></li>
 </ul>
 </nav>
+<h1 id="project-architecture-agentic-genomic-pathology-extraction">Project Architecture — Agentic Genomic / Pathology Extraction</h1>
+<blockquote>
+<p>Knowledge-transfer reference — read this to understand the code and the flow.</p>
+</blockquote>
+<hr />
 <p><strong>Project Architecture</strong></p>
 <p>Agentic Genomic / Pathology Ground-Truth Extraction</p>
 <p><em>Knowledge-transfer reference — read this to understand the code and the flow</em></p>
 <p><strong>Who this is for.</strong> An engineer joining the project who needs to understand, end to end, what the system does, how a document moves through it, how the LangGraph state machine is built, what every component does, and where to change things. It assumes general familiarity with Python and LLMs but explains every project-specific concept.</p>
 <p><strong>Companion documents.</strong> PIPELINE_REFERENCE.md (per-node + config change-playbooks) and AGENTS.md (the agent-vs-workflow classification). This document is the umbrella that ties them together.</p>
 <h1 id="contents">Contents</h1>
-<blockquote>
-<p>1. What the system does</p>
-<p>2. The 60-second mental model</p>
-<p>3. Repository map — where things live</p>
-<p>4. The execution lifecycle — entry to exit</p>
-<p>5. How the LangGraph is constructed</p>
-<p>6. The eleven nodes — purpose and mechanism</p>
-<p>7. Agents, single calls, and rules</p>
-<p>8. The configuration system</p>
-<p>9. The verification suite — how each check works</p>
-<p>10. The core infrastructure (core/)</p>
-<p>11. The agent trace — the audit spine</p>
-<p>12. The SME review system</p>
-<p>13. Artifacts written per run</p>
-<p>14. Extending the system</p>
-<p>15. Testing — the gate suite</p>
-<p>16. The evaluation module — post-extraction grading</p>
-<p>17. Glossary</p>
-</blockquote>
+<ol type="1">
+<li><p>What the system does</p></li>
+<li><p>The 60-second mental model</p></li>
+<li><p>Repository map — where things live</p></li>
+<li><p>The execution lifecycle — entry to exit</p></li>
+<li><p>How the LangGraph is constructed</p></li>
+<li><p>The eleven nodes — purpose and mechanism</p></li>
+<li><p>Agents, single calls, and rules</p></li>
+<li><p>The configuration system</p></li>
+<li><p>The verification suite — how each check works</p></li>
+<li><p>The core infrastructure (core/)</p></li>
+<li><p>The agent trace — the audit spine</p></li>
+<li><p>The SME review system</p></li>
+<li><p>Artifacts written per run</p></li>
+<li><p>Extending the system</p></li>
+<li><p>Testing — the gate suite</p></li>
+<li><p>The evaluation module — post-extraction grading</p></li>
+<li><p>Glossary</p></li>
+</ol>
 <h1 id="what-the-system-does">1. What the system does</h1>
 <p>The system reads a clinical PDF (a genomic / molecular-pathology report) and produces a <strong>structured, schema-conformant, evidence-grounded extraction</strong> of its clinically meaningful content — patient metadata, gene variants, molecular biomarkers, and the tested-gene panel — along with a complete audit trail of how every value was obtained, and a prioritized queue of anything a human needs to review.</p>
-<p><strong>The hard problem.</strong> Clinical PDFs are messy: OCR noise, fax artifacts, tables split across pages, the same gene mentioned three different ways, addenda that amend earlier findings. A naive “feed the PDF to an LLM and ask for JSON” approach fails on recall (misses findings), precision (hallucinates), grounding (can't prove where a value came from), and auditability (a black box no clinician will trust).</p>
+<p><strong>The hard problem.</strong> Clinical PDFs are messy: OCR noise, fax artifacts, tables split across pages, the same gene mentioned three different ways, addenda that amend earlier findings. A naive “feed the PDF to an LLM and ask for JSON” approach fails on recall (misses findings), precision (hallucinates), grounding (can’t prove where a value came from), and auditability (a black box no clinician will trust).</p>
 <p><strong>The approach.</strong> A multi-stage pipeline that combines deterministic rules, single-purpose LLM calls, and one genuinely agentic extractor — each used only where it is the cheapest correct tool — wired together as a self-correcting LangGraph state machine. Everything an LLM produces is checked by a deterministic verifier; anything that fails is auto-repaired where possible and escalated to a human only when it genuinely needs judgment.</p>
-<table>
+<table style="width:99%;">
+<colgroup>
+<col style="width: 99%" />
+</colgroup>
 <tbody>
 <tr class="odd">
-<td style="text-align: left;"><strong>One-sentence summary.</strong> A self-correcting graph that extracts structured clinical data with recall-first LLM agents, validates everything with deterministic checks, auto-repairs what it can, and escalates only the genuine residue — with a full per-field audit trail at every step.</td>
+<td style="text-align: center;"><strong>One-sentence summary.</strong> A self-correcting graph that extracts structured clinical data with recall-first LLM agents, validates everything with deterministic checks, auto-repairs what it can, and escalates only the genuine residue — with a full per-field audit trail at every step.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">2. The 60-second mental model</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">document flows through the nodes in a straight line until triage, ich either finishes the document or kicks off a correction loop (the ng-back):</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><code>mermaid owchart TD A["document_received"] --&gt; B["preprocess&lt;br/&gt;DocAI → FaxFilter → BlockProfiler → MedicalNER"] B --&gt; C["planner"] --&gt; D["teams"] --&gt; E["linker"] --&gt; F["verifiers"] --&gt; G{"triage"} G -- "route = repair" --&gt; H["repair"] G -- "route = done" --&gt; I["vmaw"] H -.-&gt; F F -.-&gt;|"loop until triage says done"| G I --&gt; K["decision_router"] --&gt; L["persist"] style G fill:#fef3c7,stroke:#d97706,stroke-width:2px style L fill:#dcfce7,stroke:#16a34a,stroke-width:2px style H fill:#fee2e2,stroke:#dc2626</code> The ping-back loop.** triage → repair → linker → verifiers → triage. ter repair fixes something, the linker re-assembles, the verifiers -check, and triage decides again — repeating until no fixable fects remain (or the repair budget / recur-guard stops it). This is at makes the graph self-correcting rather than a one-shot pipeline.</td>
 </tr>
 </tbody>
 </table>
-<h1 id="the-60-second-mental-model">2. The 60-second mental model</h1>
-<p>A document flows through the nodes in a straight line until triage, which either finishes the document or kicks off a correction loop (the ping-back):</p>
-<div class="mermaid">
-flowchart TD
-    A["document_received"] --> B["preprocess<br/>DocAI → FaxFilter → BlockProfiler → MedicalNER"]
-    B --> C["planner"]
-    C --> D["teams"]
-    D --> E["linker"]
-    E --> F["verifiers"]
-    F --> G{"triage"}
-
-    G -- "route = repair" --> H["repair"]
-    G -- "route = done" --> I["vmaw"]
-
-    H -.->|reprofile / re-link / renormalize| B2["profiler / teams / linker"]
-    B2 --> F
-    F -.->|"loop until triage says done"| G
-
-    I --> K["decision_router"]
-    K --> L["persist"]
-
-    style G fill:#fef3c7,stroke:#d97706,stroke-width:2px
-    style L fill:#dcfce7,stroke:#16a34a,stroke-width:2px
-    style H fill:#fee2e2,stroke:#dc2626
-</div>
-<p><strong>The ping-back loop.</strong> triage → repair → linker → verifiers → triage. After repair fixes something, the linker re-assembles, the verifiers re-check, and triage decides again — repeating until no fixable defects remain (or the repair budget / recur-guard stops it). This is what makes the graph self-correcting rather than a one-shot pipeline.</p>
-<table>
-<tbody>
-<tr class="odd">
-<td style="text-align: left;"><strong>How far back does the repair reach?</strong> The GRAPH edge after repair is always repair → linker. But the WORK inside the repair node reaches further back than the linker: <strong>reprofile_block</strong> re-runs the BlockProfiler on a misrouted block (a preprocess-stage agent) and then re-extracts; <strong>re_extract_team</strong> re-runs the team's Extractor/Auditor/Arbiter. So although the graph only loops back to the linker, the correction effectively reaches back as far as the BlockProfiler — re-profile a block → re-extract → re-link → re-verify → re-triage.</td>
-</tr>
-</tbody>
-</table>
+<h2 id="how-far-back-does-the-repair-reach-the-graph-edge-after-repair-is-always-repair-linker.-but-the-work-inside-the-repair-node-reaches-further-back-than-the-linker-reprofile_block-re-runs-the-blockprofiler-on-a-misrouted-block-a-preprocess-stage-agent-and-then-re-extracts-re_extract_team-re-runs-the-teams-extractorauditorarbiter.-so-although-the-graph-only-loops-back-to-the-linker-the-correction-effectively-reaches-back-as-far-as-the-blockprofiler-re-profile-a-block-re-extract-re-link-re-verify-re-triage."><strong>How far back does the repair reach?</strong> The GRAPH edge after repair is always repair → linker. But the WORK inside the repair node reaches further back than the linker: <strong>reprofile_block</strong> re-runs the BlockProfiler on a misrouted block (a preprocess-stage agent) and then re-extracts; <strong>re_extract_team</strong> re-runs the team’s Extractor/Auditor/Arbiter. So although the graph only loops back to the linker, the correction effectively reaches back as far as the BlockProfiler — re-profile a block → re-extract → re-link → re-verify → re-triage.</h2>
 <p><strong>Read it as four stages:</strong> (1) PREPARE the document into pages/blocks/candidates (preprocess); (2) EXTRACT each schema section with a team of agents (planner + teams); (3) ASSEMBLE + VERIFY the whole envelope (linker + verifiers); (4) CORRECT — triage routes each defect either back into the ping-back loop (repair, which can re-profile a block, re-extract a team, renormalize a field, etc.) or, once settled, forward to deep-resolution (vmaw), a final verdict (decision_router), and disk (persist).</p>
 <h1 id="repository-map-where-things-live">3. Repository map — where things live</h1>
-<p>The codebase is organized by responsibility, not by phase. The directories you'll touch most:</p>
+<p>The codebase is organized by responsibility, not by phase. The directories you’ll touch most:</p>
 <table>
 <thead>
 <tr class="header">
 <th style="text-align: left;"><strong>Directory</strong></th>
-<th style="text-align: left;"><strong>What's in it</strong></th>
+<th style="text-align: left;"><strong>What’s in it</strong></th>
 </tr>
 </thead>
 <tbody>
@@ -216,8 +153,8 @@ flowchart TD
 <td style="text-align: left;">All behavior-driving configuration: schemas/, prompts/, teams_v4.yaml, section_layout.yaml, link_registry_v4.yaml, dedup_policy.yaml, ner_mapping.yaml.</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">ui/phase1/</td>
-<td style="text-align: left;">The Streamlit review UI: field_trace.py, field_view.py, evidence.py, sme_decisions.py, views/.</td>
+<td style="text-align: left;">ui/ Th</td>
+<td style="text-align: left;">e SME Review Platform — a Flask + HTML/JS SPA. app.py (Flask server), index.html, app.js, agent-trace.js, pdf-viewer.js, styles.css. Reads artifacts from local_runs/artifacts/<doc>/.</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">scripts/gates/</td>
@@ -235,204 +172,217 @@ flowchart TD
 <li><p><strong>Resolve the PDF</strong> — local path or gs:// URI; reads the bytes into memory.</p></li>
 <li><p><strong>Load configs</strong> — the v4 schema into a SchemaLoader (builds Pydantic models at runtime), the Jinja prompt environment, and the YAML configs (teams, layout, links, dedup, NER).</p></li>
 <li><p><strong>Build the graph</strong> — calls graph_selfcorrecting.build_selfcorrecting_graph(deps), which assembles and compiles the LangGraph state machine.</p></li>
-<li><p><strong>Seed the state</strong> — {doc_id, pipeline_version:"v4", raw_pdf_bytes, agent_trace:[]}.</p></li>
+<li><p><strong>Seed the state</strong> — {doc_id, pipeline_version:“v4”, raw_pdf_bytes, agent_trace:[]}.</p></li>
 <li><p><strong>Invoke</strong> — await graph.ainvoke(seed, config={recursion_limit: 60}). The graph executes the nodes; each node writes artifacts to disk. The runner returns a RunResult with the verdict, latency, and cost.</p></li>
-<li><h1 id="how-the-langgraph-is-constructed">How the LangGraph is constructed</h1></li>
 </ol>
+<h1 id="how-the-langgraph-is-constructed">5. How the LangGraph is constructed</h1>
 <p>This is the heart of the system. The graph is a <strong>LangGraph StateGraph</strong> — a directed graph of nodes that each read a shared state object and return a partial update. Construction happens in pipeline/graph_selfcorrecting.py:build_selfcorrecting_graph().</p>
 <h2 id="the-shared-state-object">5.1 The shared state object</h2>
 <p>Every node reads and writes one TypedDict, PipelineState (in core/state.py). It has channels for every stage: doc_profile, parser_hypothesis, section_outputs, team_results, links, verifier_scorecards, repair_requests, escalation_queue, agent_trace, verdict, and more.</p>
-<table>
-<tbody>
-<tr class="odd">
-<td style="text-align: left;"><strong>Critical rule — declare or drop.</strong> LangGraph only propagates state keys that are DECLARED on PipelineState. An undeclared key a node returns is silently dropped between nodes. This caused a real bug (the “empty extraction” bug) where the repair-cycle channels vanished. Every channel the triage→repair→linker→verifiers→triage cycle threads — repair_budget_used, repair_requests, defect_signatures_seen, block_reads, repair_log — must be declared. If you add cross-node state, declare it on PipelineState first.</td>
-</tr>
-</tbody>
-</table>
-<h2 id="how-state-deltas-merge">5.2 How state deltas merge</h2>
-<p>LangGraph's default channel behavior is <strong>last-value-wins (overwrite)</strong>, not append — there are no reducer annotations on the channels. This has one important consequence for the agent_trace channel, which must ACCUMULATE across all nodes:</p>
-<p>Each node that records to the trace reads the current list, appends its records, and returns the WHOLE new list — via core/trace_recorder.py:extend_trace():</p>
-<table style="width:99%;">
+<table style="width:100%;">
 <colgroup>
-<col style="width: 98%" />
+<col style="width: 99%" />
 </colgroup>
 <tbody>
 <tr class="odd">
-<td><p># every node does this — read, append, return the full list</p>
-<p>return {"agent_trace": extend_trace(state.get("agent_trace"), rec1, rec2, ...)}</p>
-<p># extend_trace assigns a monotonic `step` to each new record and returns</p>
-<p># a fresh list. Because the channel overwrites, returning the full list</p>
-<p># is how accumulation works without a reducer.</p></td>
+<td style="text-align: center;"><strong>Critical rule — declare or drop.</strong> LangGraph only propagates state keys that are DECLARED on PipelineState. An undeclared key a node returns is silently dropped between nodes. This caused a real bug (the “empty extraction” bug) where the repair-cycle channels vanished. Every channel the triage→repair→linker→verifiers→triage cycle threads — repair_budget_used, repair_requests, defect_signatures_seen, block_reads, repair_log — must be declared. If you add cross-node state, declare it on PipelineState first.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">5.2 How state deltas merge</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">ngGraph’s default channel behavior is <strong>last-value-wins verwrite)</strong>, not append — there are no reducer annotations on the annels. This has one important consequence for the agent_trace annel, which must ACCUMULATE across all nodes:</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">ch node that records to the trace reads the current list, appends its cords, and returns the WHOLE new list — via re/trace_recorder.py:extend_trace():</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">———————————————————————+ # every node does this — read, append, return the full list | | return {“agent_trace”: extend_trace(state.get(“agent_trace”), | rec1, rec2, ...)} | | # extend_trace assigns a monotonic `step` to each new record and | returns | | # a fresh list. Because the channel overwrites, returning the full | list | | # is how accumulation works without a reducer. | ———————————————————————+</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">5.3 The nodes and edges</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">nstruction is explicit — add each node, then wire the edges:</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">———————————————————————+ g = StateGraph(PipelineState) | | g.add_node(“document_received”, _document_received_v3_node) | | g.add_node(“preprocess”, | make_preprocess_node(deps.preprocess_deps)) | | g.add_node(“planner”, _make_planner_node(...)) | | g.add_node(“teams”, _make_teams_node(teams=deps.teams)) | | g.add_node(“linker”, _make_linker_node(linker=deps.linker, | ...)) | | g.add_node(“verifiers”, | _make_selfcorrecting_verifier_node(...)) | | g.add_node(“triage”, make_triage_node(agent=triage_agent)) | | g.add_node(“repair”, | make_repair_node(executor=repair_executor)) | | g.add_node(“vmaw”, make_vmaw_node(agent=vmaw_agent)) | | g.add_node(“decision_router”, | make_decision_router_v3_node(...)) | | g.add_node(“persist”, | _make_selfcorrecting_persist_node(...)) | | g.set_entry_point(“document_received”) | | g.add_edge(“document_received”, “preprocess”) | | g.add_edge(“preprocess”, “planner”) | | g.add_edge(“planner”, “teams”) | | g.add_edge(“teams”, “linker”) | | g.add_edge(“linker”, “verifiers”) | | g.add_edge(“verifiers”, “triage”) | | # THE LOOP: triage routes to repair (fixable + budget) or vmaw | (settled) | | g.add_conditional_edges(“triage”, triage_route, | | {“repair”: “repair”, “done”: “vmaw”}) | | g.add_edge(“repair”, “linker”) # re-link → re-verify → | re-triage | | g.add_edge(“vmaw”, “decision_router”) | | g.add_edge(“decision_router”, “persist”) | | g.add_edge(“persist”, END) | | compiled = g.compile(checkpointer=checkpointer) | ———————————————————————+</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">The one decision point.** Every edge is fixed EXCEPT triage, which es add_conditional_edges. The function triage_route(state) returns ther “repair” or “done”, and the graph follows the matching edge. epair" loops back to the linker; “done” exits the loop to VMAW. is conditional edge is what makes the graph self-correcting rather an linear.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">5.4 The repair loop and why it terminates</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">e cycle triage → repair → linker → verifiers → triage could spin rever if defects keep re-firing. Three guarantees stop it:</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><strong>Per-team repair cap</strong> (default 1) — each team gets at most one re-extract per run.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><strong>Global budget</strong> = n_teams × factor — once spent, all remaining defects escalate instead of repairing. Threaded through the repair_budget_used channel.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><strong>Recur-guard</strong> — if the same defect signature (kind, ref, section) is seen twice in a row, it force-escalates (the repair isn’t working). Threaded through defect_signatures_seen.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><strong>Hard backstop</strong> — LangGraph’s recursion_limit=60 is the final safety net if all else fails.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">5.5 The checkpointer</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">e graph compiles with a MemorySaver checkpointer (Phase 1 default, om core/checkpointer.py). It snapshots state between nodes so a run n be resumed. Phase 4 swaps in a Firestore-backed checkpointer when E interrupt/resume lands — the factory build_checkpointer() is the ngle swap point, no graph change needed.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">6. The eleven nodes — purpose and mechanism</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">ch node below states WHY it exists (the problem it solves), HOW it rks internally (the mechanism), and what it reads and writes. This is e heart of understanding the system — the graph just sequences ese.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">6.1 document_received</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">Purpose.** A guard rail. Downstream nodes assume certain state keys ist; this node fails fast on a malformed invocation and seeds the pty scaffolding so no later node hits a missing-key error.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">Mechanism.** Checks the seed has the required fields (doc_id, pdf urce), asserts pipeline_version == “v4”, and returns initial empty annels (team_outputs={}, verifier_scorecards=[], latency_ms=0). LLM, no trace.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">6.2 preprocess — turn a PDF into reasoning-ready structure</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">Purpose.** LLMs reason over text, not pixels. This node converts the w PDF into the structured substrate every later stage needs: per-page xt, layout blocks with bounding boxes, block roles, and a ndidate-entity list. It runs four sub-agents in sequence, each solving e sub-problem.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"># DocAIParser — PDF → pages, blocks, boxes</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">Why.** We need not just the text but WHERE each piece sits on the page - bounding boxes drive the UI highlighting and the per-block ovenance citations. <strong>How.</strong> POSTs the PDF bytes to Google Document ’s Layout Parser, which returns pages, layout blocks (paragraphs, ble cells, headers) each with a bounding box and reading-order index. diagnostic logs how many blocks actually carried boxes (catches ocessor-version regressions). Cross-page tables are stitched so a sult row split across a page break stays one logical block. Writes cai_raw.json, pages.json, blocks.json, word_geometry.json, urce.pdf.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"># FaxHeaderFilter — strip transport noise</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">Why.** Faxed reports carry banner pages, TO/FROM headers, and ge-count footers that are not clinical content; left in, they pollute R and waste extractor attention. <strong>How.</strong> Deterministic heuristics egex + position) flag matching blocks with text_role = x_transport_noise. Flagged blocks are hidden from downstream prompts t kept in state (the extractor can still inspect them via a tool if it st). Pure rules — the patterns are stable and you want 100% producibility.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"># BlockProfiler — label every block’s role + section</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">Why.** Two later stages need to know what each block IS: the call-floor verifier (a block roled “results_table” that produced no traction is a loud miss) and the per-team block index (the extractor shown which blocks belong to its section). A regex cannot tell a thodology paragraph from a results paragraph — it needs reading mprehension. <strong>How.</strong> A single Gemini Flash call (batched 300 blocks r call, ≤3 concurrent) classifies each block into one of ~28 roles eport_title, panel_or_test_name, methodology, results_table, terpretation, clinical_significance, final_diagnosis, addendum, ectronic_signature, page_header, …) and a list of target-umbrella nts (which schema sections the block likely feeds). Writes ock_profiles.json. It’s a single call, not an agent — all the ock text is already in the prompt; there’s nothing to look up.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"># MedicalNER — propose candidate entities (the recall floor)</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">Why.** Each team’s extractor needs a RECALL FLOOR — a seed list of tities it must capture or exceed — so a missed gene is caught. How.** Three SciSpaCy / spaCy models (en_ner_bionlp13cg_md for nes/proteins, en_ner_bc5cdr_md for chemicals/diseases, _core_web_sm for people/dates/orgs) run over each block to extract w entity spans. Then a DETERMINISTIC post-processor onfig/ner_mapping.yaml) routes them in 6 steps: (1) drop entities in ise-role blocks; (2) drop stoplist false-positives; (3) look up the bel → allowed sections; (4) intersect with the block’s umbrella hints mpty → fall back to allowed, confidence 0.6; non-empty → 0.9); (5) oup occurrences by (surface, section); (6) for metadata, assign a rget-field hint. Writes parser_hypothesis.json. The post-processor is terministic (it replaced an earlier LLM version) because the routing fully specifiable.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">its 4 preprocess trace records (one per sub-agent).</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">6.3 planner — decide which teams run</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">Purpose.** Not every document has every section; running a team whose ction is absent wastes an LLM call. The planner prunes the team set. Mechanism.** Deterministic. Reads the teams config (enabled flags — disables significant_findings + clinical_information) and the block ction-hints; a team with no supporting hint and no config requirement n be skipped. Returns active_team_keys + a per-team rationale. Emits e planning record. No LLM — the decision is config + set logic with exact answer.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">6.4 teams — the extraction heavy-lifter</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">Purpose.** Produce a validated extraction of each schema section, call-first but precision-checked. This is where the real clinical ntent is pulled out. <strong>Mechanism.</strong> Every active team runs in parallel syncio.gather). A team is a 4-agent flow:</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><strong>Extractor</strong> (the only true agent) — a ReAct loop that reads the routed blocks + page text, calls tools, and emits the section JSON. Details below.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><strong>CoverageAuditor</strong> — a single Gemini call that re-reads, comparing the extractor output against the NER candidates to flag missed or spurious fields and raise a gap_signal.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><strong>Arbiter</strong> (fires only on a gap) — a single Gemini Flash call deciding ACCEPT_EXTRACTOR (auditor was wrong), RE_EXTRACT (try again with focused hints), or INVOKE_VMAW (escalate).</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><strong>Extractor (re-extract)</strong> (fires only if Arbiter said RE_EXTRACT) — the same agent with the hints appended.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"># The Extractor’s ReAct loop (the mechanism that matters most)</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">pped at <strong>MAX_ITERATIONS = 12</strong>. Each iteration: send the message story to Gemini (with tools bound); if it returns tool calls, execute em and append the results; if it returns a Final Answer, parse + lidate. Key safeguards:</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><strong>Force-final on the last 2 iterations</strong> — tools are dropped and JSON is demanded, so a tool-happy model can’t burn the whole budget without finalizing.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><strong>Section-wrap unwrap</strong> — if the model wraps its output under the section name ({“Genomic_Variant_umbrella”: {…}}), it’s unwrapped once before validation.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><strong>Scalar coercion</strong> — known type-tics are fixed (page_number: [1] → 1) per section_layout.scalar_keys.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><strong>Validate + retry</strong> — the payload is Pydantic-validated against the section; on failure the raw content is dumped to local_runs/_extractor_debug/ and a correction message is injected for one more try. Two failures → AgentError.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">ites section_outputs + team_results. Emits one trace record per ent, including the Extractor’s full ReAct sub-steps (each thought, ol call, tool result) and its &lt;reasoning&gt; block when present.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">6.5 linker — assemble one envelope + find relationships</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">Purpose.** Each team produced its section in isolation. The linker itches them into one document envelope, discovers cross-section lationships (a variant on a tested panel, a result for a tested gene, addendum amending a finding), and reconciles the same entity pearing in two sections. <strong>Mechanism — five steps:</strong></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><strong>Assemble.</strong> Walk section_outputs and build the envelope, driven by section_layout.yaml (record_array, count fields, empty placeholders) so the code is generic across sections.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><strong>Gene-key seed links.</strong> For each registered link type (link_registry_v4.yaml), walk both endpoint sections and match records by HGNC-canonical gene key (so HER2 == ERBB2). Deterministic.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><strong>Contextual links.</strong> An optional LLM adjudicator proposes links a rule can’t (e.g. “the above variant” → a specific finding). Each proposal then passes 4 deterministic validation checks: type ∈ registry, endpoint sections match the registered pair, both refs resolve, evidence cited + confidence ≥ floor. Rejected proposals are recorded as dropped_contextual_links.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><strong>Dedup — two rules, one config.</strong> dedup_policy.yaml declares both kinds. <strong>(a) Cross-section dedup:</strong> when the same gene appears in two sections, the policy names the owner and drops the duplicate from the lower-priority section (e.g. a sequence variant belongs to Genomic_Variant_umbrella, not the biomarker section). <strong>(b) Intra-section dedup (generic, field-agnostic):</strong> when the same entity appears multiple times INSIDE one section — e.g. KRAS p.G12D restated on two pages with different VAFs — a <code>within_section</code> rule with <code>identity_keys: [gene_key, amino_acid_change]</code> reconciles the duplicates. If all non-identity fields agree, keep the first and drop the rest. If any field differs, emit a <code>variant_superseded_by</code> link from loser→winner (winner = later page). Implemented in <code>agents/linker._apply_intra_section_dedup</code> with <code>_canon_change</code> and <code>_HGVS_PREFIX_RE</code> for HGVS-prefix-tolerant identity comparison (<code>p.G12D</code> matches <code>G12D</code>).</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">. <strong>Supersession — end-to-end.</strong> An addendum block that references an earlier finding, OR intra-section dedup, both emit <code>variant_superseded_by</code> link records into <code>envelope["links"]</code>. Downstream, <code>transform/to_production._apply_supersession_filter</code> walks those links and drops each superseded record from the production output. The internal <code>extraction_v2.json</code> still contains ALL records + links for auditing; only the final <code>extraction_production.json</code> is filtered.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">ites extraction_v2.json — the canonical envelope — every run. its linking / dedup / supersession records.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">6.6 verifiers — check everything the LLMs produced</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">Purpose.** LLMs are recall-first and fallible; nothing they emit is usted until a deterministic (or, for two checks, LLM-backed) verifier nfirms it. This node turns “the model said so” into “a check nfirmed it.” <strong>Mechanism.</strong> Runs the 8-verifier suite + the nkBindingVerifier over the envelope; each produces a scorecard ass/fail + notes + field errors). Failed scorecards become defects for iage. The full how-it-works for each verifier is in §9. Writes rification_v2.json, verification_v3.json, binding_items.json.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">6.7 triage — classify and route every defect</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">Purpose.** A failed check needs a decision: can the system fix it tomatically, or does a human have to look? Triage makes that call per fect — it is the brain of the self-correcting loop. <strong>Mechanism.</strong> A terministic taxonomy maps each defect kind to either a repair action an escalation:</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><strong>Defect</strong> <strong>→ Action</strong> <strong>Repair primitive / route</strong></td>
 </tr>
 </tbody>
 </table>
-<h2 id="the-nodes-and-edges">5.3 The nodes and edges</h2>
-<p>Construction is explicit — add each node, then wire the edges:</p>
-<table style="width:99%;">
-<colgroup>
-<col style="width: 98%" />
-</colgroup>
-<tbody>
-<tr class="odd">
-<td><p>g = StateGraph(PipelineState)</p>
-<p>g.add_node("document_received", _document_received_v3_node)</p>
-<p>g.add_node("preprocess", make_preprocess_node(deps.preprocess_deps))</p>
-<p>g.add_node("planner", _make_planner_node(...))</p>
-<p>g.add_node("teams", _make_teams_node(teams=deps.teams))</p>
-<p>g.add_node("linker", _make_linker_node(linker=deps.linker, ...))</p>
-<p>g.add_node("verifiers", _make_selfcorrecting_verifier_node(...))</p>
-<p>g.add_node("triage", make_triage_node(agent=triage_agent))</p>
-<p>g.add_node("repair", make_repair_node(executor=repair_executor))</p>
-<p>g.add_node("vmaw", make_vmaw_node(agent=vmaw_agent))</p>
-<p>g.add_node("decision_router", make_decision_router_v3_node(...))</p>
-<p>g.add_node("persist", _make_selfcorrecting_persist_node(...))</p>
-<p>g.set_entry_point("document_received")</p>
-<p>g.add_edge("document_received", "preprocess")</p>
-<p>g.add_edge("preprocess", "planner")</p>
-<p>g.add_edge("planner", "teams")</p>
-<p>g.add_edge("teams", "linker")</p>
-<p>g.add_edge("linker", "verifiers")</p>
-<p>g.add_edge("verifiers", "triage")</p>
-<p># THE LOOP: triage routes to repair (fixable + budget) or vmaw (settled)</p>
-<p>g.add_conditional_edges("triage", triage_route,</p>
-<p>{"repair": "repair", "done": "vmaw"})</p>
-<p>g.add_edge("repair", "linker") # re-link → re-verify → re-triage</p>
-<p>g.add_edge("vmaw", "decision_router")</p>
-<p>g.add_edge("decision_router", "persist")</p>
-<p>g.add_edge("persist", END)</p>
-<p>compiled = g.compile(checkpointer=checkpointer)</p></td>
-</tr>
-</tbody>
-</table>
-<p><strong>The one decision point.</strong> Every edge is fixed EXCEPT triage, which uses add_conditional_edges. The function triage_route(state) returns either "repair" or "done", and the graph follows the matching edge. "repair" loops back to the linker; "done" exits the loop to VMAW. This conditional edge is what makes the graph self-correcting rather than linear.</p>
-<h2 id="the-repair-loop-and-why-it-terminates">5.4 The repair loop and why it terminates</h2>
-<p>The cycle triage → repair → linker → verifiers → triage could spin forever if defects keep re-firing. Three guarantees stop it:</p>
-<ul>
-<li><p><strong>Per-team repair cap</strong> (default 1) — each team gets at most one re-extract per run.</p></li>
-<li><p><strong>Global budget</strong> = n_teams × factor — once spent, all remaining defects escalate instead of repairing. Threaded through the repair_budget_used channel.</p></li>
-<li><p><strong>Recur-guard</strong> — if the same defect signature (kind, ref, section) is seen twice in a row, it force-escalates (the repair isn't working). Threaded through defect_signatures_seen.</p></li>
-<li><p><strong>Hard backstop</strong> — LangGraph's recursion_limit=60 is the final safety net if all else fails.</p></li>
-</ul>
-<h2 id="the-checkpointer">5.5 The checkpointer</h2>
-<p>The graph compiles with a MemorySaver checkpointer (Phase 1 default, from core/checkpointer.py). It snapshots state between nodes so a run can be resumed. Phase 4 swaps in a Firestore-backed checkpointer when SME interrupt/resume lands — the factory build_checkpointer() is the single swap point, no graph change needed.</p>
-<h1 id="the-eleven-nodes-purpose-and-mechanism">6. The eleven nodes — purpose and mechanism</h1>
-<p>Each node below states WHY it exists (the problem it solves), HOW it works internally (the mechanism), and what it reads and writes. This is the heart of understanding the system — the graph just sequences these.</p>
-<h2 id="document_received">6.1 document_received</h2>
-<p><strong>Purpose.</strong> A guard rail. Downstream nodes assume certain state keys exist; this node fails fast on a malformed invocation and seeds the empty scaffolding so no later node hits a missing-key error.</p>
-<p><strong>Mechanism.</strong> Checks the seed has the required fields (doc_id, pdf source), asserts pipeline_version == "v4", and returns initial empty channels (team_outputs={}, verifier_scorecards=[], latency_ms=0). No LLM, no trace.</p>
-<h2 id="preprocess-turn-a-pdf-into-reasoning-ready-structure">6.2 preprocess — turn a PDF into reasoning-ready structure</h2>
-<p><strong>Purpose.</strong> LLMs reason over text, not pixels. This node converts the raw PDF into the structured substrate every later stage needs: per-page text, layout blocks with bounding boxes, block roles, and a candidate-entity list. It runs four sub-agents in sequence, each solving one sub-problem.</p>
-<h3 id="docaiparser-pdf-pages-blocks-boxes">DocAIParser — PDF → pages, blocks, boxes</h3>
-<p><strong>Why.</strong> We need not just the text but WHERE each piece sits on the page — bounding boxes drive the UI highlighting and the per-block provenance citations. <strong>How.</strong> POSTs the PDF bytes to Google Document AI's Layout Parser, which returns pages, layout blocks (paragraphs, table cells, headers) each with a bounding box and reading-order index. A diagnostic logs how many blocks actually carried boxes (catches processor-version regressions). Cross-page tables are stitched so a result row split across a page break stays one logical block. Writes docai_raw.json, pages.json, blocks.json, word_geometry.json, source.pdf.</p>
-<h3 id="faxheaderfilter-strip-transport-noise">FaxHeaderFilter — strip transport noise</h3>
-<p><strong>Why.</strong> Faxed reports carry banner pages, TO/FROM headers, and page-count footers that are not clinical content; left in, they pollute NER and waste extractor attention. <strong>How.</strong> Deterministic heuristics (regex + position) flag matching blocks with text_role = fax_transport_noise. Flagged blocks are hidden from downstream prompts but kept in state (the extractor can still inspect them via a tool if it must). Pure rules — the patterns are stable and you want 100% reproducibility.</p>
-<h3 id="blockprofiler-label-every-blocks-role-section">BlockProfiler — label every block's role + section</h3>
-<p><strong>Why.</strong> Two later stages need to know what each block IS: the recall-floor verifier (a block roled "results_table" that produced no extraction is a loud miss) and the per-team block index (the extractor is shown which blocks belong to its section). A regex cannot tell a methodology paragraph from a results paragraph — it needs reading comprehension. <strong>How.</strong> A single Gemini Flash call (batched 300 blocks per call, ≤3 concurrent) classifies each block into one of ~28 roles (report_title, panel_or_test_name, methodology, results_table, interpretation, clinical_significance, final_diagnosis, addendum, electronic_signature, page_header, …) and a list of target-umbrella hints (which schema sections the block likely feeds). Writes block_profiles.json. It's a single call, not an agent — all the block text is already in the prompt; there's nothing to look up.</p>
-<h3 id="medicalner-propose-candidate-entities-the-recall-floor">MedicalNER — propose candidate entities (the recall floor)</h3>
-<p><strong>Why.</strong> Each team's extractor needs a RECALL FLOOR — a seed list of entities it must capture or exceed — so a missed gene is caught. <strong>How.</strong> Three SciSpaCy / spaCy models (en_ner_bionlp13cg_md for genes/proteins, en_ner_bc5cdr_md for chemicals/diseases, en_core_web_sm for people/dates/orgs) run over each block to extract raw entity spans. Then a DETERMINISTIC post-processor (config/ner_mapping.yaml) routes them in 6 steps: (1) drop entities in noise-role blocks; (2) drop stoplist false-positives; (3) look up the label → allowed sections; (4) intersect with the block's umbrella hints (empty → fall back to allowed, confidence 0.6; non-empty → 0.9); (5) group occurrences by (surface, section); (6) for metadata, assign a target-field hint. Writes parser_hypothesis.json. The post-processor is deterministic (it replaced an earlier LLM version) because the routing is fully specifiable.</p>
-<p>Emits 4 preprocess trace records (one per sub-agent).</p>
-<h2 id="planner-decide-which-teams-run">6.3 planner — decide which teams run</h2>
-<p><strong>Purpose.</strong> Not every document has every section; running a team whose section is absent wastes an LLM call. The planner prunes the team set. <strong>Mechanism.</strong> Deterministic. Reads the teams config (enabled flags — v4 disables significant_findings + clinical_information) and the block section-hints; a team with no supporting hint and no config requirement can be skipped. Returns active_team_keys + a per-team rationale. Emits one planning record. No LLM — the decision is config + set logic with an exact answer.</p>
-<h2 id="teams-the-extraction-heavy-lifter">6.4 teams — the extraction heavy-lifter</h2>
-<p><strong>Purpose.</strong> Produce a validated extraction of each schema section, recall-first but precision-checked. This is where the real clinical content is pulled out. <strong>Mechanism.</strong> Every active team runs in parallel (asyncio.gather). A team is a 4-agent flow:</p>
-<ul>
-<li><p><strong>Extractor</strong> (the only true agent) — a ReAct loop that reads the routed blocks + page text, calls tools, and emits the section JSON. Details below.</p></li>
-<li><p><strong>CoverageAuditor</strong> — a single Gemini call that re-reads, comparing the extractor output against the NER candidates to flag missed or spurious fields and raise a gap_signal.</p></li>
-<li><p><strong>Arbiter</strong> (fires only on a gap) — a single Gemini Flash call deciding ACCEPT_EXTRACTOR (auditor was wrong), RE_EXTRACT (try again with focused hints), or INVOKE_VMAW (escalate).</p></li>
-<li><p><strong>Extractor (re-extract)</strong> (fires only if Arbiter said RE_EXTRACT) — the same agent with the hints appended.</p></li>
-</ul>
-<h3 id="the-extractors-react-loop-the-mechanism-that-matters-most">The Extractor's ReAct loop (the mechanism that matters most)</h3>
-<p>Capped at <strong>MAX_ITERATIONS = 12</strong>. Each iteration: send the message history to Gemini (with tools bound); if it returns tool calls, execute them and append the results; if it returns a Final Answer, parse + validate. Key safeguards:</p>
-<ul>
-<li><p><strong>Force-final on the last 2 iterations</strong> — tools are dropped and JSON is demanded, so a tool-happy model can't burn the whole budget without finalizing.</p></li>
-<li><p><strong>Section-wrap unwrap</strong> — if the model wraps its output under the section name ({"Genomic_Variant_umbrella": {…}}), it's unwrapped once before validation.</p></li>
-<li><p><strong>Scalar coercion</strong> — known type-tics are fixed (page_number: [1] → 1) per section_layout.scalar_keys.</p></li>
-<li><p><strong>Validate + retry</strong> — the payload is Pydantic-validated against the section; on failure the raw content is dumped to local_runs/_extractor_debug/ and a correction message is injected for one more try. Two failures → AgentError.</p></li>
-</ul>
-<p>Writes section_outputs + team_results. Emits one trace record per agent, including the Extractor's full ReAct sub-steps (each thought, tool call, tool result) and its &lt;reasoning&gt; block when present.</p>
-<h2 id="linker-assemble-one-envelope-find-relationships">6.5 linker — assemble one envelope + find relationships</h2>
-<p><strong>Purpose.</strong> Each team produced its section in isolation. The linker stitches them into one document envelope, discovers cross-section relationships (a variant on a tested panel, a result for a tested gene, an addendum amending a finding), and reconciles the same entity appearing in two sections. <strong>Mechanism — five steps:</strong></p>
-<ol start="6" type="1">
-<li><p><strong>Assemble.</strong> Walk section_outputs and build the envelope, driven by section_layout.yaml (record_array, count fields, empty placeholders) so the code is generic across sections.</p></li>
-<li><p><strong>Gene-key seed links.</strong> For each registered link type (link_registry_v4.yaml), walk both endpoint sections and match records by HGNC-canonical gene key (so HER2 == ERBB2). Deterministic.</p></li>
-<li><p><strong>Contextual links.</strong> An optional LLM adjudicator proposes links a rule can't (e.g. "the above variant" → a specific finding). Each proposal then passes 4 deterministic validation checks: type ∈ registry, endpoint sections match the registered pair, both refs resolve, evidence cited + confidence ≥ floor. Rejected proposals are recorded as dropped_contextual_links.</p></li>
-<li><p><strong>Dedup — two rules, one config.</strong> dedup_policy.yaml declares both kinds. <strong>(a) Cross-section dedup:</strong> when the same gene appears in two sections, the policy names the owner and drops the duplicate from the lower-priority section (e.g. a sequence variant belongs to Genomic_Variant_umbrella, not the biomarker section). <strong>(b) Intra-section dedup (generic, field-agnostic):</strong> when the same entity appears multiple times INSIDE one section — e.g. KRAS p.G12D restated on two pages with different VAFs — a <code>within_section</code> rule with <code>identity_keys: [gene_key, amino_acid_change]</code> reconciles the duplicates. If all non-identity fields agree, keep the first and drop the rest. If any field differs, emit a <code>variant_superseded_by</code> link from loser→winner (winner = later page). Implemented in <code>agents/linker._apply_intra_section_dedup</code> with <code>_canon_change</code> and <code>_HGVS_PREFIX_RE</code> for HGVS-prefix-tolerant identity comparison (<code>p.G12D</code> matches <code>G12D</code>).</p></li>
-<li><p><strong>Supersession — end-to-end.</strong> An addendum block that references an earlier finding, OR intra-section dedup, both emit <code>variant_superseded_by</code> link records into <code>envelope["links"]</code>. Downstream, <code>transform/to_production._apply_supersession_filter</code> walks those links and drops each superseded record from the production output. The internal <code>extraction_v2.json</code> still contains ALL records + links for auditing; only the final <code>extraction_production.json</code> is filtered.</p></li>
-</ol>
-<p>Writes extraction_v2.json — the canonical envelope — every run. Emits linking / dedup / supersession records.</p>
-<h2 id="verifiers-check-everything-the-llms-produced">6.6 verifiers — check everything the LLMs produced</h2>
-<p><strong>Purpose.</strong> LLMs are recall-first and fallible; nothing they emit is trusted until a deterministic (or, for two checks, LLM-backed) verifier confirms it. This node turns "the model said so" into "a check confirmed it." <strong>Mechanism.</strong> Runs the 8-verifier suite + the LinkBindingVerifier over the envelope; each produces a scorecard (pass/fail + notes + field errors). Failed scorecards become defects for triage. The full how-it-works for each verifier is in §9. Writes verification_v2.json, verification_v3.json, binding_items.json.</p>
-<h2 id="triage-classify-and-route-every-defect">6.7 triage — classify and route every defect</h2>
-<p><strong>Purpose.</strong> A failed check needs a decision: can the system fix it automatically, or does a human have to look? Triage makes that call per defect — it is the brain of the self-correcting loop. <strong>Mechanism.</strong> A deterministic taxonomy maps each defect kind to either a repair action or an escalation:</p>
-<table>
-<thead>
-<tr class="header">
-<th style="text-align: left;"><strong>Defect</strong></th>
-<th style="text-align: left;"><strong>→ Action</strong></th>
-<th style="text-align: left;"><strong>Repair primitive / route</strong></th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td style="text-align: left;">schema_error (repairable field)</td>
-<td style="text-align: left;">repair</td>
-<td style="text-align: left;">re_extract_team</td>
-</tr>
-<tr class="even">
-<td style="text-align: left;">coverage gap</td>
-<td style="text-align: left;">repair</td>
-<td style="text-align: left;">re_extract_team</td>
-</tr>
-<tr class="odd">
-<td style="text-align: left;">recall_floor loud miss</td>
-<td style="text-align: left;">repair</td>
-<td style="text-align: left;">reprofile_block</td>
-</tr>
-<tr class="even">
-<td style="text-align: left;">normalization mismatch</td>
-<td style="text-align: left;">repair</td>
-<td style="text-align: left;">renormalize_field</td>
-</tr>
-<tr class="odd">
-<td style="text-align: left;">invalid_hgvs</td>
-<td style="text-align: left;">escalate → VMAW</td>
-<td style="text-align: left;">(CITE/EC capability)</td>
-</tr>
-<tr class="even">
-<td style="text-align: left;">link binding refuted</td>
-<td style="text-align: left;">repair</td>
-<td style="text-align: left;">re_link</td>
-</tr>
-<tr class="odd">
-<td style="text-align: left;">ungroundable value</td>
-<td style="text-align: left;">repair</td>
-<td style="text-align: left;">drop_and_flag</td>
-</tr>
-<tr class="even">
-<td style="text-align: left;">attribution contested</td>
-<td style="text-align: left;">repair → VMAW</td>
-<td style="text-align: left;">(2-pass)</td>
-</tr>
-<tr class="odd">
-<td style="text-align: left;">needs_review (OCR/inference)</td>
-<td style="text-align: left;">escalate</td>
-<td style="text-align: left;">SME</td>
-</tr>
-</tbody>
-</table>
-<p>It then dedups the escalation queue (the verifier→triage pass re-detects standing defects each cycle), updates the recur-guard signatures, and returns route="repair" (fixable defects remain + budget left) or route="done". The conditional edge follows the route. Emits a summary record + one per repair/escalation.</p>
+<p>schema_error (repairable field) repair re_extract_team coverage gap repair re_extract_team recall_floor loud miss repair reprofile_block normalization mismatch repair renormalize_field invalid_hgvs escalate → VMAW (CITE/EC capability) link binding refuted repair re_link ungroundable value repair drop_and_flag attribution contested repair → VMAW (2-pass) needs_review (OCR/inference) escalate SME</p>
+<p>It then dedups the escalation queue (the verifier→triage pass re-detects standing defects each cycle), updates the recur-guard signatures, and returns route=“repair” (fixable defects remain + budget left) or route=“done”. The conditional edge follows the route. Emits a summary record + one per repair/escalation.</p>
 <h2 id="repair-apply-the-auto-fixes">6.8 repair — apply the auto-fixes</h2>
 <p><strong>Purpose.</strong> Execute the repairs triage queued, so the next verify pass is cleaner. This is the action half of the self-correcting loop. <strong>Mechanism — five primitives:</strong></p>
 <ul>
-<li><p><strong>re_extract_team</strong> — re-invokes the team's full SectionTeam (Extractor → Auditor → Arbiter) with focused hints. Calls the LLM again, scoped to one team.</p></li>
-<li><p><strong>reprofile_block</strong> — patches the BlockProfiler's output (adds the correct section hint to a misrouted block) THEN re-extracts. This is why the correction reaches back to the preprocess stage.</p></li>
-<li><p><strong>renormalize_field</strong> — deterministic: looks up the normalizer (HGNC / HGVS / date) and rewrites the field's canonical form. No LLM.</p></li>
+<li><p><strong>re_extract_team</strong> — re-invokes the team’s full SectionTeam (Extractor → Auditor → Arbiter) with focused hints. Calls the LLM again, scoped to one team.</p></li>
+<li><p><strong>reprofile_block</strong> — patches the BlockProfiler’s output (adds the correct section hint to a misrouted block) THEN re-extracts. This is why the correction reaches back to the preprocess stage.</p></li>
+<li><p><strong>renormalize_field</strong> — deterministic: looks up the normalizer (HGNC / HGVS / date) and rewrites the field’s canonical form. No LLM.</p></li>
 <li><p><strong>re_link</strong> — no work in the node; the repair → linker edge re-links with an avoid/re-evaluate hint.</p></li>
 <li><p><strong>drop_and_flag</strong> — removes an ungroundable value, keeps the payload for SME audit. No LLM.</p></li>
 </ul>
 <p>Each repair appends to repair_log. Then the edge repair → linker re-assembles → re-verifies → re-triages — the ping-back loop, bounded by the per-team cap, the global budget, and the recur-guard (§5.4).</p>
-<h2 id="vmaw-deep-resolve-what-auto-repair-couldnt">6.9 vmaw — deep-resolve what auto-repair couldn't</h2>
-<p><strong>Purpose.</strong> Some escalations aren't blindly auto-fixable but ARE resolvable with more investigation — find a citation, read more surrounding text, adjudicate between candidates. VMAW does that investigation before bothering a human, shrinking the SME queue. <strong>Mechanism.</strong> For each queued escalation, a routing table maps the defect kind to an ordered list of capabilities, tried until one yields a value:</p>
+<h2 id="vmaw-deep-resolve-what-auto-repair-couldnt">6.9 vmaw — deep-resolve what auto-repair couldn’t</h2>
+<p><strong>Purpose.</strong> Some escalations aren’t blindly auto-fixable but ARE resolvable with more investigation — find a citation, read more surrounding text, adjudicate between candidates. VMAW does that investigation before bothering a human, shrinking the SME queue. <strong>Mechanism.</strong> For each queued escalation, a routing table maps the defect kind to an ordered list of capabilities, tried until one yields a value:</p>
 <ul>
 <li><p><strong>EC (Expand Context)</strong> — pull more source text around the disputed value.</p></li>
 <li><p><strong>CITE</strong> — hunt the source for a citation that supports or refutes the value.</p></li>
@@ -440,7 +390,7 @@ flowchart TD
 </ul>
 <p>Then the autonomy decision: a contested or VA result always <strong>proposes to the SME</strong> (never silently picks); a grounded, uncontested result with confidence ≥ 0.7 is <strong>auto_applied</strong> to the envelope and leaves the queue; an ungroundable record may be <strong>dropped</strong> (kept for audit). Writes vmaw_log.json. The remaining queue is split into 4 SME bands (§11).</p>
 <h2 id="decision_router-the-final-verdict">6.10 decision_router — the final verdict</h2>
-<p><strong>Purpose.</strong> Decide the document's fate: commit it automatically, commit the good sections and flag the rest, or send the whole thing to a human. <strong>Mechanism.</strong> A deterministic ladder, evaluated per section then aggregated: (1) a team verdict of sme_flag → sme_flag; (2) any failed verifier scorecard → sme_flag; (3) llm_confidence_score below the team's auto_accept threshold (default 0.85) → sme_flag; (4) otherwise auto_accept. The v3 router does this PER SECTION, so a clean metadata section commits while a flagged variant section is escalated — that's partial_accept. Records the verdict + accepted vs flagged sections. No LLM — it's aggregation + thresholds, and you want it reproducible.</p>
+<p><strong>Purpose.</strong> Decide the document’s fate: commit it automatically, commit the good sections and flag the rest, or send the whole thing to a human. <strong>Mechanism.</strong> A deterministic ladder, evaluated per section then aggregated: (1) a team verdict of sme_flag → sme_flag; (2) any failed verifier scorecard → sme_flag; (3) llm_confidence_score below the team’s auto_accept threshold (default 0.85) → sme_flag; (4) otherwise auto_accept. The v3 router does this PER SECTION, so a clean metadata section commits while a flagged variant section is escalated — that’s partial_accept. Records the verdict + accepted vs flagged sections. No LLM — it’s aggregation + thresholds, and you want it reproducible.</p>
 <h2 id="persist-write-everything-to-disk">6.11 persist — write everything to disk</h2>
 <p><strong>Purpose.</strong> Make the run inspectable and the result consumable by the UI and downstream systems. <strong>Mechanism.</strong> Writes every artifact (the envelope, verification, agent_trace.json, repair_log, vmaw_log, binding_items, escalation_queue.json + the banded escalation_queue_banded.json, link_metrics) under local_runs/artifacts/&lt;doc_id&gt;/ (and GCS/Firestore in cloud). Commits the extraction record to the database only if verdict ∈ {auto_accept, partial_accept}.</p>
 <h1 id="agents-single-calls-and-rules">7. Agents, single calls, and rules</h1>
@@ -502,57 +452,26 @@ flowchart TD
 </tbody>
 </table>
 <p>*The agentic design for VMAW and Linker lets the LLM own the sequencing; a simpler implementation uses a fixed routing table / one-shot adjudicator. See AGENTS.md §2.2–2.3.</p>
-<table>
+<table style="width:99%;">
+<colgroup>
+<col style="width: 99%" />
+</colgroup>
 <tbody>
 <tr class="odd">
-<td style="text-align: left;"><strong>The principle.</strong> Use the cheapest mechanism that is correct: rules when the answer is specifiable, a single LLM call for a bounded judgment over information already in hand, and a tool-using agent only when the LLM must gather evidence it lacks at prompt time. Pair every agent's discovery with a non-agentic commit gate: agentic exploration, deterministic commitment.</td>
+<td style="text-align: center;"><strong>The principle.</strong> Use the cheapest mechanism that is correct: rules when the answer is specifiable, a single LLM call for a bounded judgment over information already in hand, and a tool-using agent only when the LLM must gather evidence it lacks at prompt time. Pair every agent’s discovery with a non-agentic commit gate: agentic exploration, deterministic commitment.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">8. The configuration system</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">e code is generic; the configs are the contract. Almost every hema-aware behavior reads one of these files. (Full annotations + ange-playbooks in PIPELINE_REFERENCE.md §“Configs.”)</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><strong>File</strong> <strong>Controls</strong></td>
 </tr>
 </tbody>
 </table>
-<h1 id="the-configuration-system">8. The configuration system</h1>
-<p>The code is generic; the configs are the contract. Almost every schema-aware behavior reads one of these files. (Full annotations + change-playbooks in PIPELINE_REFERENCE.md §“Configs.”)</p>
-<table>
-<thead>
-<tr class="header">
-<th style="text-align: left;"><strong>File</strong></th>
-<th style="text-align: left;"><strong>Controls</strong></th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td style="text-align: left;">schemas/genomic_pathology_v4.json</td>
-<td style="text-align: left;">The extraction contract. Drives Pydantic validation, prompt field-lists, scoring, UI labels.</td>
-</tr>
-<tr class="even">
-<td style="text-align: left;">teams_v4.yaml</td>
-<td style="text-align: left;">Which teams exist; per-team schema section, prompt, LLM models, tool allowlist, thresholds, enabled flag.</td>
-</tr>
-<tr class="odd">
-<td style="text-align: left;">section_layout.yaml</td>
-<td style="text-align: left;">Per-section shape for the generic Linker/scorer: record_array, gene_key_field, empty placeholder, scalar_keys.</td>
-</tr>
-<tr class="even">
-<td style="text-align: left;">link_registry_v4.yaml</td>
-<td style="text-align: left;">Cross-section link types: tier, active, from_section, to_section.</td>
-</tr>
-<tr class="odd">
-<td style="text-align: left;">dedup_policy.yaml</td>
-<td style="text-align: left;">Who owns what when an entity appears in two sections (e.g. Genomic_Variant owns sequence variants).</td>
-</tr>
-<tr class="even">
-<td style="text-align: left;">ner_mapping.yaml</td>
-<td style="text-align: left;">SciSpaCy label → section routing, drop-roles, stoplist, field-hint rules.</td>
-</tr>
-<tr class="odd">
-<td style="text-align: left;">prompts/system/*.j2</td>
-<td style="text-align: left;">Base prompts (extractor, coverage_auditor, arbiter) shared by all teams.</td>
-</tr>
-<tr class="even">
-<td style="text-align: left;">prompts/&lt;team&gt;_team.j2</td>
-<td style="text-align: left;">Per-team overlays: domain rules layered on the base via {% include %}.</td>
-</tr>
-</tbody>
-</table>
+<p>schemas/genomic_pathology_v4.json The extraction contract. Drives Pydantic validation, prompt field-lists, scoring, UI labels. teams_v4.yaml Which teams exist; per-team schema section, prompt, LLM models, tool allowlist, thresholds, enabled flag. section_layout.yaml Per-section shape for the generic Linker/scorer: record_array, gene_key_field, empty placeholder, scalar_keys. link_registry_v4.yaml Cross-section link types: tier, active, from_section, to_section. dedup_policy.yaml Who owns what when an entity appears in two sections (e.g. Genomic_Variant owns sequence variants). ner_mapping.yaml SciSpaCy label → section routing, drop-roles, stoplist, field-hint rules. prompts/system/*.j2 Base prompts (extractor, coverage_auditor, arbiter) shared by all teams. prompts/&lt;team&gt;_team.j2 Per-team overlays: domain rules layered on the base via {% include %}.</p>
 <h1 id="the-verification-suite-how-each-check-works">9. The verification suite — how each check works</h1>
 <p>Eight checks run over the assembled envelope; each emits a scorecard (pass/fail + notes + field errors). A failed scorecard becomes a defect for triage. Most are deterministic; two binding checks are LLM-backed. The point of this layer is to turn every LLM claim into something a deterministic check confirmed.</p>
 <table>
@@ -564,24 +483,24 @@ flowchart TD
 </thead>
 <tbody>
 <tr class="odd">
-<td style="text-align: left;">schema_validator</td>
-<td style="text-align: left;">Pydantic-validates the envelope. STRUCTURAL errors (type/required/unknown-key) are hard failures; COSMETIC nits (pattern/format/min/max) are split out as advisory — the teams validate with Pydantic (no pattern), so a jsonschema pattern nit must not sink a committed doc.</td>
+<td style="text-align: left;">schema_validator P</td>
+<td style="text-align: left;">ydantic-validates the envelope. STRUCTURAL errors (type/required/unknown-key) are hard failures; COSMETIC nits (pattern/format/min/max) are split out as advisory — the teams validate with Pydantic (no pattern), so a jsonschema pattern nit must not sink a committed doc.</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">coverage_audit</td>
-<td style="text-align: left;">Compares populated record counts per section to the parser-hypothesis (NER) count; if extracted + tolerance &lt; hypothesis, flags a gap. A cross-document recall floor, distinct from the per-team CoverageAuditor.</td>
+<td style="text-align: left;">coverage_audit C</td>
+<td style="text-align: left;">ompares populated record counts per section to the parser-hypothesis (NER) count; if extracted + tolerance &lt; hypothesis, flags a gap. A cross-document recall floor, distinct from the per-team CoverageAuditor.</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">link_consistency</td>
-<td style="text-align: left;">Walks every cross-section link and confirms both from_ref and to_ref resolve to records that exist in the envelope (catches dangling refs from a linker bug or post-linker mutation).</td>
+<td style="text-align: left;">link_consistency W</td>
+<td style="text-align: left;">alks every cross-section link and confirms both from_ref and to_ref resolve to records that exist in the envelope (catches dangling refs from a linker bug or post-linker mutation).</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">evidence_confidence</td>
-<td style="text-align: left;">Walks every leaf record and confirms it cites at least one evidence_block_id — no ungrounded values pass downstream.</td>
+<td style="text-align: left;">evidence_confidence W</td>
+<td style="text-align: left;">alks every leaf record and confirms it cites at least one evidence_block_id — no ungrounded values pass downstream.</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">recall_floor</td>
-<td style="text-align: left;">Cross-references block roles with the envelope: a block roled results_table that no record cites is a candidate miss; a LOUD miss triggers an AI re-read of just that block to confirm present (→ ping-back) vs genuinely absent (→ accept).</td>
+<td style="text-align: left;">recall_floor C</td>
+<td style="text-align: left;">ross-references block roles with the envelope: a block roled results_table that no record cites is a candidate miss; a LOUD miss triggers an AI re-read of just that block to confirm present (→ ping-back) vs genuinely absent (→ accept).</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">attribution</td>
@@ -592,8 +511,8 @@ flowchart TD
 <td style="text-align: left;">Builds offline normalizers and flags fields whose canonical form differs from the extracted surface → renormalize_field repair.</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">hgvs_validity</td>
-<td style="text-align: left;">Confirms every HGVS change is structurally valid. Trusts the agent's own hgvs_normalized.valid when present; else re-checks, retrying with the field-appropriate c./p./g. prefix (verbatim '1849G&gt;T' is legitimate). Only genuinely malformed values flag.</td>
+<td style="text-align: left;">hgvs_validity C</td>
+<td style="text-align: left;">onfirms every HGVS change is structurally valid. Trusts the agent’s own hgvs_normalized.valid when present; else re-checks, retrying with the field-appropriate c./p./g. prefix (verbatim ‘1849G&gt;T’ is legitimate). Only genuinely malformed values flag.</td>
 </tr>
 </tbody>
 </table>
@@ -604,15 +523,15 @@ flowchart TD
 <li><p><strong>V3 hallucination</strong> (deterministic, multi-section haystack) — does this value actually appear in the report?</p></li>
 <li><p><strong>V4 link confirm</strong> (LLM) — does this cross-reference hold semantically?</p></li>
 </ul>
-<p>Refuted / uncertain verdicts become defects. V1/V3 are deterministic (string/structure); V2/V4 need reading comprehension, so they're single LLM calls injected into the otherwise-deterministic verifier.</p>
+<p>Refuted / uncertain verdicts become defects. V1/V3 are deterministic (string/structure); V2/V4 need reading comprehension, so they’re single LLM calls injected into the otherwise-deterministic verifier.</p>
 <h1 id="the-core-infrastructure-core">10. The core infrastructure (core/)</h1>
 <p>Cross-cutting machinery every node relies on. Understanding these explains how the system stays schema-flexible and how the LLMs are wired.</p>
 <h2 id="schema_loader.py-json-schema-pydantic-at-runtime">10.1 schema_loader.py — JSON Schema → Pydantic at runtime</h2>
-<p><strong>Purpose.</strong> The single most important infrastructure piece: it makes the whole system schema-driven. There are no hand-written Pydantic models for the clinical sections — they are GENERATED from the JSON Schema at process start. Change the schema, and validation / prompts / scoring all follow with no Python edit. <strong>Mechanism.</strong> SchemaLoader.from_path() reads config/schemas/genomic_pathology_v4.json once, and for each section builds a Pydantic model with pydantic's create_model() from the section's properties. validate(section, candidate) runs that model's model_validate. It also exposes fields_for_section (for prompt rendering), section_description, and get_root_schema (the strict schema Gemini uses as response_schema). A helper coalesces null arrays so a model emitting null for an empty list still validates.</p>
+<p><strong>Purpose.</strong> The single most important infrastructure piece: it makes the whole system schema-driven. There are no hand-written Pydantic models for the clinical sections — they are GENERATED from the JSON Schema at process start. Change the schema, and validation / prompts / scoring all follow with no Python edit. <strong>Mechanism.</strong> SchemaLoader.from_path() reads config/schemas/genomic_pathology_v4.json once, and for each section builds a Pydantic model with pydantic’s create_model() from the section’s properties. validate(section, candidate) runs that model’s model_validate. It also exposes fields_for_section (for prompt rendering), section_description, and get_root_schema (the strict schema Gemini uses as response_schema). A helper coalesces null arrays so a model emitting null for an empty list still validates.</p>
 <h2 id="prompt_renderer.py-jinja-prompt-assembly">10.2 prompt_renderer.py — Jinja prompt assembly</h2>
-<p><strong>Purpose.</strong> Render the per-team prompts from templates + schema, so prompts stay in version-controlled .j2 files, not Python strings. <strong>Mechanism.</strong> A Jinja2 environment over config/prompts/. Each team prompt {% include %}s the base system/extractor.j2, which is rendered with the team's context: team_name, schema_section_name + description, the field contract (name, type, required, extraction_mode, format, pattern — from schema_loader), the tool list, and the parser-hypothesis count. Also renders the coverage_auditor and arbiter prompts.</p>
-<h2 id="tool_registry.py-the-extractors-tools">10.3 tool_registry.py — the Extractor's tools</h2>
-<p><strong>Purpose.</strong> Build the LangChain tools the Extractor binds, closure-bound to the current run's state so a tool like pdf_page_loader can read THIS document's pages. <strong>Mechanism.</strong> build_tools_for_state(state, allowlist, schema_loader) returns only the tools in the team's allowlist. The catalog (11 tools):</p>
+<p><strong>Purpose.</strong> Render the per-team prompts from templates + schema, so prompts stay in version-controlled .j2 files, not Python strings. <strong>Mechanism.</strong> A Jinja2 environment over config/prompts/. Each team prompt {% include %}s the base system/extractor.j2, which is rendered with the team’s context: team_name, schema_section_name + description, the field contract (name, type, required, extraction_mode, format, pattern — from schema_loader), the tool list, and the parser-hypothesis count. Also renders the coverage_auditor and arbiter prompts.</p>
+<h2 id="tool_registry.py-the-extractors-tools">10.3 tool_registry.py — the Extractor’s tools</h2>
+<p><strong>Purpose.</strong> Build the LangChain tools the Extractor binds, closure-bound to the current run’s state so a tool like pdf_page_loader can read THIS document’s pages. <strong>Mechanism.</strong> build_tools_for_state(state, allowlist, schema_loader) returns only the tools in the team’s allowlist. The catalog (11 tools):</p>
 <table>
 <thead>
 <tr class="header">
@@ -622,107 +541,135 @@ flowchart TD
 </thead>
 <tbody>
 <tr class="odd">
-<td style="text-align: left;">pdf_page_loader</td>
-<td style="text-align: left;">Return a page's full text + its layout blocks.</td>
+<td style="text-align: left;">pdf_page_loader Re</td>
+<td style="text-align: left;">turn a page’s full text + its layout blocks.</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">pdf_text_search</td>
-<td style="text-align: left;">Per-block regex search; returns matches with block_id + excerpt (for provenance).</td>
+<td style="text-align: left;">pdf_text_search Pe</td>
+<td style="text-align: left;">r-block regex search; returns matches with block_id + excerpt (for provenance).</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">docai_layout_lookup</td>
-<td style="text-align: left;">Look up a block's layout metadata by id.</td>
+<td style="text-align: left;">docai_layout_lookup Lo</td>
+<td style="text-align: left;">ok up a block’s layout metadata by id.</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">state_read</td>
-<td style="text-align: left;">Whitelisted read of a state key (no mutation).</td>
+<td style="text-align: left;">state_read W</td>
+<td style="text-align: left;">hitelisted read of a state key (no mutation).</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">schema_validate</td>
-<td style="text-align: left;">Run SchemaLoader.validate on a candidate mid-reasoning.</td>
+<td style="text-align: left;">schema_validate R</td>
+<td style="text-align: left;">un SchemaLoader.validate on a candidate mid-reasoning.</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">hgnc_normalize</td>
-<td style="text-align: left;">Canonicalize a gene symbol against the HGNC seed (fuzzy + flag).</td>
+<td style="text-align: left;">hgnc_normalize C</td>
+<td style="text-align: left;">anonicalize a gene symbol against the HGNC seed (fuzzy + flag).</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">hgvs_validate</td>
-<td style="text-align: left;">Structurally validate a coding/protein/genomic change.</td>
+<td style="text-align: left;">hgvs_validate S</td>
+<td style="text-align: left;">tructurally validate a coding/protein/genomic change.</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">biomarker_normalize</td>
-<td style="text-align: left;">Canonical biomarker name lookup.</td>
+<td style="text-align: left;">biomarker_normalize C</td>
+<td style="text-align: left;">anonical biomarker name lookup.</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">method_normalize</td>
-<td style="text-align: left;">Canonical assay-method name.</td>
+<td style="text-align: left;">method_normalize C</td>
+<td style="text-align: left;">anonical assay-method name.</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">date_parser</td>
-<td style="text-align: left;">Parse a date string to ISO YYYY-MM-DD.</td>
+<td style="text-align: left;">date_parser P</td>
+<td style="text-align: left;">arse a date string to ISO YYYY-MM-DD.</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">npi_validator</td>
-<td style="text-align: left;">Validate an NPI provider number.</td>
+<td style="text-align: left;">npi_validator V</td>
+<td style="text-align: left;">alidate an NPI provider number.</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">(normalize_quantity)</td>
-<td style="text-align: left;">Defined but in no allowlist → currently unbound (dead).</td>
+<td style="text-align: left;">(normalize_quantity) D</td>
+<td style="text-align: left;">efined but in no allowlist → currently unbound (dead).</td>
 </tr>
 </tbody>
 </table>
 <h2 id="the-m2-normalization-toolkit-preprocess">10.4 The M2 normalization toolkit (preprocess/)</h2>
 <p>The deterministic, offline reference data + validators the tools wrap:</p>
 <ul>
-<li><p><strong>hgnc_resolver</strong> — resolves a gene surface to its canonical HGNC symbol against a seed TSV, with fuzzy matching + a needs-review flag when the match isn't exact.</p></li>
+<li><p><strong>hgnc_resolver</strong> — resolves a gene surface to its canonical HGNC symbol against a seed TSV, with fuzzy matching + a needs-review flag when the match isn’t exact.</p></li>
 <li><p><strong>hgvs_validate</strong> — tiered HGVS validation: the full biocommons-hgvs parser when installed, a deterministic regex backend otherwise (offline-safe).</p></li>
 <li><p><strong>normalizers</strong> — canonical forms for dates, methods, quantities, biomarker names.</p></li>
-<li><p><strong>negation / assertion</strong> — detects negated or hypothetical mentions so "no evidence of JAK2" isn't extracted as a positive finding.</p></li>
+<li><p><strong>negation / assertion</strong> — detects negated or hypothetical mentions so “no evidence of JAK2” isn’t extracted as a positive finding.</p></li>
 </ul>
 <h2 id="persistence.py-checkpointer.py">10.5 persistence.py &amp; checkpointer.py</h2>
 <p><strong>persistence</strong> — writes artifacts to the local filesystem (file:// URIs under local_runs/) or to GCS in cloud, and the run / extraction records to the database. One interface, two backends. <strong>checkpointer</strong> — the LangGraph state snapshotter; MemorySaver in Phase 1, swappable to Firestore for SME interrupt/resume via build_checkpointer().</p>
 <h2 id="the-scoring-evaluation-harness">10.6 The scoring / evaluation harness</h2>
-<p><strong>Purpose.</strong> Measure extraction quality against hand-built ground truth so changes can be evaluated. <strong>Mechanism.</strong> scripts/score_against_ground_truth.py compares a run's envelope to data/ground_truth/v4/&lt;doc&gt;.json field by field, walking the section_layout to find each section's records, and reports per-section precision / recall / F1. Because it's schema-driven it picks up new fields automatically; only custom comparators (e.g. HGVS equivalence) need code.</p>
+<p><strong>Purpose.</strong> Measure extraction quality against hand-built ground truth so changes can be evaluated. <strong>Mechanism.</strong> scripts/score_against_ground_truth.py compares a run’s envelope to data/ground_truth/v4/&lt;doc&gt;.json field by field, walking the section_layout to find each section’s records, and reports per-section precision / recall / F1. Because it’s schema-driven it picks up new fields automatically; only custom comparators (e.g. HGVS equivalence) need code.</p>
 <h1 id="the-agent-trace-the-audit-spine">11. The agent trace — the audit spine</h1>
-<p>Every node writes to one channel, state["agent_trace"], via core/trace_recorder.py:record(). By the end of a run, agent_trace.json is the complete, ordered decision log — one record per agent invocation across all phases.</p>
+<p>Every node writes to one channel, state[“agent_trace”], via core/trace_recorder.py:record(). By the end of a run, agent_trace.json is the complete, ordered decision log — one record per agent invocation across all phases.</p>
 <p>Each record carries: a monotonic step (set by extend_trace), a phase (preprocess … decision), the agent name, a plain one-sentence summary written AT record time, the section + refs it acted on (for per-field filtering), input/output summaries, verdict, reasoning, confidence, latency, and tool_calls.</p>
-<p>The UI's ui/phase1/field_trace.py:assemble_field_trace() filters this unified list by section/ref to produce a per-field timeline, sorted by step (the invoke order IS the render order — no phase-priority dict). Each Extractor row surfaces BOTH the per-field rationale (from the record's provenance) and the model's section-level reasoning.</p>
-<table>
+<p>The UI’s ui/ (browser SPA)field_trace.py:assemble_field_trace() filters this unified list by section/ref to produce a per-field timeline, sorted by step (the invoke order IS the render order — no phase-priority dict). Each Extractor row surfaces BOTH the per-field rationale (from the record’s provenance) and the model’s section-level reasoning.</p>
+<table style="width:99%;">
+<colgroup>
+<col style="width: 99%" />
+</colgroup>
 <tbody>
 <tr class="odd">
-<td style="text-align: left;"><strong>PHI discipline.</strong> Trace summaries are STRUCTURAL — counts, verdicts, ref strings, short reasoning snippets — never raw page text. The clinical values live in the extraction artifact; the trace explains the DECISION FLOW only.</td>
+<td style="text-align: center;"><strong>PHI discipline.</strong> Trace summaries are STRUCTURAL — counts, verdicts, ref strings, short reasoning snippets — never raw page text. The clinical values live in the extraction artifact; the trace explains the DECISION FLOW only.</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">12. The SME review system</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">atever the pipeline can’t settle lands in escalation_queue.json. AW first tries to auto-resolve; what remains is split into four bands n escalation_queue_banded.json) so the reviewer sees only what nuinely needs them:</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><strong>Band</strong> <strong>Meaning → SME action</strong></td>
 </tr>
 </tbody>
 </table>
-<h1 id="the-sme-review-system">12. The SME review system</h1>
-<p>Whatever the pipeline can't settle lands in escalation_queue.json. VMAW first tries to auto-resolve; what remains is split into four bands (in escalation_queue_banded.json) so the reviewer sees only what genuinely needs them:</p>
-<table>
+<p><strong>judgment</strong> Contested or ungrounded — a real decision. BLOCKS the workflow. <strong>unresolved</strong> VMAW exhausted EC+CITE+VA — investigate from scratch. BLOCKS. <strong>review_light</strong> VMAW landed a grounded+uncontested proposal — one-click batch approve. <strong>drop_audit</strong> Record VMAW dropped — periodic audit, non-blocking.</p>
+<p>The headline KPI is <strong>blocks_workflow</strong> = judgment + unresolved — the true SME-load number. The review UI (ui/ (browser SPA)views/sme_review_view.py) renders the four bands as toggleable sections, judgment + unresolved expanded by default, with a batch-approve action for review_light. For the selected item it shows the source page (highlighted), the field timeline, the per-field rationale, and Approve / Edit / Keep actions are captured as SME decisions in the browser and can be persisted by the operator’s workflow (the SPA reads artifacts from <code>local_runs/artifacts/&lt;doc&gt;/</code> served by <code>ui/app.py</code>; write-back is not currently wired end-to-end).</p>
+<h2 id="artifact-source-local-or-gcs-runtime-configurable">12.1 Artifact source — local or GCS (runtime-configurable)</h2>
+<p><code>ui/app.py</code> supports two data sources through the same URL contract (<code>/api/docs</code> and <code>/artifacts/&lt;doc&gt;/&lt;file&gt;</code>). The browser is <strong>source-agnostic</strong> — nothing in <code>app.js</code> / <code>index.html</code> changes when the source is switched. Selection is one env-var toggle read at server startup:</p>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 30%" />
+<col style="width: 53%" />
+<col style="width: 16%" />
+</colgroup>
 <thead>
 <tr class="header">
-<th style="text-align: left;"><strong>Band</strong></th>
-<th style="text-align: left;"><strong>Meaning → SME action</strong></th>
+<th>Env var</th>
+<th>Purpose</th>
+<th>Default</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
-<td style="text-align: left;"><strong>judgment</strong></td>
-<td style="text-align: left;">Contested or ungrounded — a real decision. BLOCKS the workflow.</td>
+<td><code>GCS_ARTIFACTS_BUCKET</code></td>
+<td>Set = GCS mode; unset/empty = local mode</td>
+<td><code>""</code> (= local)</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;"><strong>unresolved</strong></td>
-<td style="text-align: left;">VMAW exhausted EC+CITE+VA — investigate from scratch. BLOCKS.</td>
+<td><code>GCS_ARTIFACTS_PREFIX</code></td>
+<td>Key prefix inside the bucket for per-doc folders</td>
+<td><code>artifacts/</code></td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;"><strong>review_light</strong></td>
-<td style="text-align: left;">VMAW landed a grounded+uncontested proposal — one-click batch approve.</td>
+<td><code>GOOGLE_APPLICATION_CREDENTIALS</code></td>
+<td>Service-account JSON path (optional on GKE / Cloud Run)</td>
+<td>uses ADC</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;"><strong>drop_audit</strong></td>
-<td style="text-align: left;">Record VMAW dropped — periodic audit, non-blocking.</td>
+<td><code>PORT</code></td>
+<td>Server port</td>
+<td><code>8501</code></td>
 </tr>
 </tbody>
 </table>
-<p>The headline KPI is <strong>blocks_workflow</strong> = judgment + unresolved — the true SME-load number. The review UI (ui/phase1/views/sme_review_view.py) renders the four bands as toggleable sections, judgment + unresolved expanded by default, with a batch-approve action for review_light. For the selected item it shows the source page (highlighted), the field timeline, the per-field rationale, and Approve / Edit / Keep actions that write extraction_reviewed.json + append sme_decisions.json (original immutable).</p>
+<p><strong>Local mode (default).</strong> When <code>GCS_ARTIFACTS_BUCKET</code> is unset, <code>list_docs()</code> walks <code>local_runs/artifacts/</code> for subfolders that contain <code>extraction_v2.json</code>, and <code>serve_artifact()</code> streams files from <code>local_runs/artifacts/&lt;doc&gt;/&lt;file&gt;</code>.</p>
+<p><strong>GCS mode.</strong> When <code>GCS_ARTIFACTS_BUCKET</code> is set, <code>list_docs()</code> calls <code>storage.Client().bucket(BUCKET).list_blobs(prefix=BUCKET_PREFIX)</code> and groups blob names into <code>{doc_id}/{filename}</code> pairs. <code>serve_artifact()</code> routes through <code>_bucket().blob(...).download_as_bytes()</code> and streams the bytes back with the same MIME map as the local branch.</p>
+<p>The GCS client is lazy-initialized — <code>google-cloud-storage</code> is not imported until the first GCS request, so local dev works without gcloud credentials.</p>
+<p><strong>Path traversal defense</strong> runs BEFORE either backend is touched: <code>doc_id</code> may not contain <code>/</code> or <code>..</code>, and <code>filename</code> may not contain <code>..</code>. Invalid requests return <code>HTTP 400</code> without touching either backend.</p>
+<p>Getting artifacts INTO GCS is a separate concern — pick either (a) modify <code>core/persistence.py</code> so the pipeline writes to GCS directly, or (b) keep writing to local disk and sync post-run with <code>gsutil -m rsync -r local_runs/artifacts/ gs://&lt;bucket&gt;/artifacts/</code>. The UI change is independent.</p>
 <h1 id="artifacts-written-per-run">13. Artifacts written per run</h1>
 <p>All under local_runs/artifacts/&lt;doc_id&gt;/:</p>
 <table>
@@ -734,48 +681,48 @@ flowchart TD
 </thead>
 <tbody>
 <tr class="odd">
-<td style="text-align: left;">extraction_v2.json</td>
-<td style="text-align: left;">The assembled, verified envelope (the answer).</td>
+<td style="text-align: left;">extraction_v2.json T</td>
+<td style="text-align: left;">he assembled, verified envelope (the answer).</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">verification_v2.json / v3.json</td>
-<td style="text-align: left;">Verifier scorecards + binding verdicts + links.</td>
+<td style="text-align: left;">verification_v2.json / v3.json V</td>
+<td style="text-align: left;">erifier scorecards + binding verdicts + links.</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">agent_trace.json</td>
-<td style="text-align: left;">The complete per-agent decision timeline.</td>
+<td style="text-align: left;">agent_trace.json T</td>
+<td style="text-align: left;">he complete per-agent decision timeline.</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">repair_log.json</td>
-<td style="text-align: left;">One entry per auto-repair action.</td>
+<td style="text-align: left;">repair_log.json O</td>
+<td style="text-align: left;">ne entry per auto-repair action.</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">vmaw_log.json</td>
-<td style="text-align: left;">One entry per VMAW resolution attempt.</td>
+<td style="text-align: left;">vmaw_log.json O</td>
+<td style="text-align: left;">ne entry per VMAW resolution attempt.</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">binding_items.json</td>
-<td style="text-align: left;">Per-link V1–V4 binding verdicts.</td>
+<td style="text-align: left;">binding_items.json P</td>
+<td style="text-align: left;">er-link V1–V4 binding verdicts.</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">escalation_queue.json</td>
-<td style="text-align: left;">Items awaiting SME (post-VMAW).</td>
+<td style="text-align: left;">escalation_queue.json I</td>
+<td style="text-align: left;">tems awaiting SME (post-VMAW).</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">escalation_queue_banded.json</td>
-<td style="text-align: left;">The same queue split into the 4 SME bands + summary KPIs.</td>
+<td style="text-align: left;">escalation_queue_banded.json Th</td>
+<td style="text-align: left;">e same queue split into the 4 SME bands + summary KPIs.</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">blocks / pages / parser_hypothesis / word_geometry / source.pdf</td>
-<td style="text-align: left;">Preprocess artifacts the UI uses for highlighting.</td>
+<td style="text-align: left;">blocks / pages / parser_hypothesis / word_geometry / source.pdf Pr</td>
+<td style="text-align: left;">eprocess artifacts the UI uses for highlighting.</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">extraction_production.json</td>
-<td style="text-align: left;">The final production JSON (supersession-filtered).</td>
+<td style="text-align: left;">extraction_production.json T</td>
+<td style="text-align: left;">he final production JSON (supersession-filtered).</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">eval_metrics.json / eval_report.txt / eval_mismatches.xlsx / eval</td>
-<td style="text-align: left;">_summary.md Written by the evaluation module when the doc is graded (see §16).</td>
+<td style="text-align: left;">eval_metrics.json / eval_report.txt / eval_mismatches.xlsx / eval_su</td>
+<td style="text-align: left;">mmary.md Written by the evaluation module when the doc is graded (see §16).</td>
 </tr>
 </tbody>
 </table>
@@ -788,7 +735,7 @@ flowchart TD
 <h3 id="onboard-a-brand-new-schema-different-doc-type">Onboard a brand-new schema (different doc type)</h3>
 <p>New schema + teams + prompts + layout + ner + links + dedup, plus ~10 lines of dispatch in runner.py (the only Python edit) and a parallel gate set.</p>
 <h1 id="testing-the-gate-suite">15. Testing — the gate suite</h1>
-<p>Regression is enforced by scripts/gates/*.py — one gate per milestone, each a pure-function assert that runs offline (no LLM, no network). A gate locks a behavioral contract (e.g. “assemble_field_trace preserves each record's phase”, “VMAW dedups the legacy channel”). Run a gate with PYTHONPATH=. python scripts/gates/&lt;gate&gt;.py; it prints OK/FAIL per check and a PASS/FAIL summary. After any change, re-run the gates that touch the area; if a gate locks an old contract you intentionally changed, update the gate in the same commit.</p>
+<p>Regression is enforced by scripts/gates/*.py — one gate per milestone, each a pure-function assert that runs offline (no LLM, no network). A gate locks a behavioral contract (e.g. “assemble_field_trace preserves each record’s phase”, “VMAW dedups the legacy channel”). Run a gate with PYTHONPATH=. python scripts/gates/&lt;gate&gt;.py; it prints OK/FAIL per check and a PASS/FAIL summary. After any change, re-run the gates that touch the area; if a gate locks an old contract you intentionally changed, update the gate in the same commit.</p>
 <h1 id="the-evaluation-module-post-extraction-grading">16. The evaluation module — post-extraction grading</h1>
 <p><code>extraction_production.json</code> is the extractor’s answer. The <strong>evaluation module</strong> (<code>evaluation/</code>) is what tells us whether it’s right — by comparing that JSON against an SME-authored ground truth (an XLSX in the 20-column lab layout) and producing color-coded review workbooks, per-cell verdicts, and precision/recall/F1 metrics.</p>
 <p><strong>Where it fits.</strong> It runs AFTER the extraction pipeline has written <code>extraction_production.json</code>. The extractor doesn’t know or care about eval; the eval doesn’t touch pipeline internals.</p>
@@ -962,7 +909,7 @@ flowchart TD
 </tr>
 <tr class="even">
 <td style="text-align: left;">Scorecard</td>
-<td style="text-align: left;">One verifier's pass/fail + notes + field errors.</td>
+<td style="text-align: left;">One verifier’s pass/fail + notes + field errors.</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">Gate</td>

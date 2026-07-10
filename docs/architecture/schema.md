@@ -65,9 +65,11 @@ absent`; `rationale` is one short clause (required for `inferred`/`derived`).
 This is the per-field reasoning the SME reviewer reads and what powers the UI's
 "↳ why (this field)" line. **All five provenance-bearing sections** (report_metadata,
 biomarker record, finding, specimen record, clinical_information) emit it as an array —
-the team prompts instruct "ALWAYS emit, as an ARRAY". The readers
-(`ui/phase1/evidence.iter_provenance`) tolerate both array and legacy map. The scorer
-excludes `provenance`, and ground truth carries none, so it has zero accuracy impact.
+the team prompts instruct "ALWAYS emit, as an ARRAY". On the read side, `ui/app.js`
+fetches `extraction_v2.json` and iterates each record's `provenance` array to populate
+the field-detail panel; the scorer reads the same shape server-side. Both accept the
+legacy keyed map for back-compat. The scorer excludes `provenance`, and ground truth
+carries none, so it has zero accuracy impact.
 
 ## 4. Provenance vs occurrences
 

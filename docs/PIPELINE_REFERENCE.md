@@ -861,55 +861,35 @@ And in the database (Firestore in cloud):
 
 ## How the trace becomes the SME UI
 
-After the graph finishes, the Streamlit UI (`ui/phase1/views/*.py`) reads the
-artifacts. The two key flows:
+After the graph finishes, the browser SPA (`ui/index.html` + `ui/app.js`) fetches
+from `/api/docs` and `/artifacts/<doc>/<file>` served by `ui/app.py` (Flask). All
+timeline assembly happens **client-side** in JS.
 
 ### Per-field trace assembly
 
-```python
-# ui/phase1/evidence.py:build_entity_payload (and sme_decisions.py)
-field_rationales = field_rationale_map(extraction_v2)   # walks every provenance array
-for entity in enumerate_entities(extraction_v2):
-    trace_steps = assemble_field_trace(
-        ref=entity.ref,
-        section=entity.section,
-        agent_trace=agent_trace,                  # the unified log
-        scorecards=verification_v2.scorecards,    # legacy back-compat
-        repair_log=repair_log,                    # legacy back-compat
-        vmaw_log=vmaw_log,                        # legacy back-compat
-        binding_items=binding_items,              # legacy back-compat
-        links=verification_v2.links,              # legacy back-compat
-        field_rationale=field_rationales.get(entity.ref, "")  # per-field 'why'
-    )
-```
+The per-field timeline is assembled CLIENT-SIDE by `ui/app.js`'s
+`renderFieldDetail` (around line 500) from the same `agent_trace.json` the
+pipeline writes. When the reviewer clicks a row in the section-tab table, the
+detail panel:
 
-`assemble_field_trace` (`ui/phase1/field_trace.py`):
-1. Iterates `agent_trace`, keeps records whose `section` matches OR whose
+1. Reads the record's `provenance` array from `extraction_v2.json` — each entry
+   carries the per-field `rationale` used as the "why (this field)" line.
+2. Walks `agent_trace.json` and keeps records whose `section` matches OR whose
    `refs` touch the focused ref OR which are cross-section (Planner,
    DecisionRouter).
-2. For the high-level Extractor row, surfaces BOTH the per-field rationale
-   (`field_rationale`) AND the model's section-level reasoning
-   (`agent_reasoning`) — labelled "why (this field)" and "section reasoning"
-   respectively.
-3. Sorts by `step` (the monotonic counter from `extend_trace`). No phase-order
-   dict — the invoke order IS the render order.
-4. Falls back to the legacy channels only when `agent_trace` lacks that phase
-   (back-compat for persisted v3 runs).
+3. For the Extractor row, surfaces BOTH the per-field rationale AND the model's
+   section-level reasoning (`agent_reasoning`) — labelled "why (this field)"
+   and "section reasoning" respectively.
+4. Sorts by `step` (the monotonic counter from `extend_trace`). The invoke
+   order IS the render order.
 
-### Per-field flowchart
-
-`ui/phase1/field_view.py:pipeline_flow_svg(active_phases)`:
-- Renders the 9-phase pipeline diagram.
-- Phases in `active_phases` are full-opacity; phases that didn't fire for THIS
-  field are dimmed to 25% opacity.
-- Edges between two active phases are highlighted; edges where either endpoint
-  is dimmed are also dimmed.
-- The SME sees the full architecture AND the field's actual path at once.
+`ui/agent-trace.js` renders the resulting timeline; `ui/pdf-viewer.js` handles
+the page-highlight overlay when the reviewer opens the source PDF.
 
 ### Per-field "why this field" + "section reasoning"
 
-`ui/phase1/field_view.py:_row()` renders up to two reasoning lines under each
-step:
+`ui/app.js`'s `renderFieldDetail` renders up to two reasoning lines under each
+timeline step:
 
 ```
 ↳ why (this field): <field_rationale — from provenance[i].rationale>
@@ -1219,7 +1199,7 @@ Example: add `tumor_mutational_burden` (TMB) to `other_molecular_biomarker_umbre
   - Skip TMB unless it's clearly tumor-specific (not germline).
   ```
 
-**4. Ground truth** (`data/ground_truth/v4/demo.json` etc.):
+**4. Ground truth** (`ground_truth/demo_v4.json` etc.):
 - For each fixture, add the expected `tumor_mutational_burden` value (`null` if absent).
 
 **5. Scorer** (`scripts/score_against_ground_truth.py`):
@@ -1335,7 +1315,7 @@ Example: add `pharmacogenomics_findings` (drug-gene interactions).
 **7. Dedup policy** (`config/dedup_policy.yaml`) — OPTIONAL:
 - Add a rule if the new section can conflict with an existing one.
 
-**8. Ground truth** (`data/ground_truth/v4/*.json`):
+**8. Ground truth** (`ground_truth/*.json`):
 - For each fixture, add the new `pharmacogenomics_findings` object (with empty
   arrays where absent).
 
@@ -1411,7 +1391,7 @@ or a parallel system tree if needed):
   lines of dispatch — the only Python edit.
 
 **9. Ground truth + scorer fixtures**:
-- New folder `data/ground_truth/radiology/`.
+- New folder `ground_truth/radiology/`.
 - Run the scorer against it.
 
 **10. UI**: views auto-discover. The Production browser needs a new mapping
@@ -1430,7 +1410,7 @@ new contract — mirror the v4 gates structurally.
 [x] link_registry_radiology.yaml
 [x] dedup_policy_radiology.yaml
 [x] pipeline/runner.py — dispatch entry for the new version
-[x] data/ground_truth/radiology/* fixtures
+[x] ground_truth/radiology/* fixtures
 [ ] scorer — usually auto-discovers, verify
 [ ] production_mapping_radiology.yaml (if customer-facing)
 [x] new gates locking the schema
@@ -1444,12 +1424,12 @@ new contract — mirror the v4 gates structurally.
 |---|---|
 | Disable a team for one run | `teams_v4.yaml` → set `enabled: false` |
 | Swap a team's LLM | `teams_v4.yaml` → change `models.extractor.name` |
-| Give a team a new tool | `teams_v4.yaml` → add to `tool_allowlist` + ensure tool exists in `core/tools/` |
+| Give a team a new tool | `teams_v4.yaml` → add to `tool_allowlist` + ensure tool is registered in `core/tool_registry.py` (per `config/tools.yaml`) |
 | Add a stoplist word to drop a SciSpaCy false positive | `ner_mapping.yaml` → `stoplist:` |
 | Forbid SciSpaCy from routing CHEMICAL entities anywhere | `ner_mapping.yaml` → remove `CHEMICAL` from `label_to_umbrellas` (or add specific block roles to `drop_roles`) |
 | Add a new auto-link between two sections | `link_registry_v4.yaml` → one new `link_types` entry |
 | Disable cross-section dedup for a section pair | `dedup_policy.yaml` → comment out / delete the rule |
-| Tighten the recall-floor sensitivity | `verification/recall_floor.py` (code, not config — but the `text_role` mapping in `config/block_roles.yaml` controls which roles count as "loud") |
+| Tighten the recall-floor sensitivity | `verification/recall_floor.py` + `config/recall_floor.yaml` — the yaml controls which `text_role` values count as "loud" vs "quiet" |
 | Add a new repair primitive | `pipeline/repair.py` (code) + `pipeline/triage.py` to route to it (code) — not config-only yet |
 | Change extraction-mode rules globally | `config/prompts/system/extractor.j2` (the VERBATIM/DERIVED contract section) |
 | Make the model emit a different scratchpad format | `config/prompts/system/extractor.j2` (the `## Reasoning trace` section) |
@@ -1475,8 +1455,8 @@ Every node writes to one channel: `state["agent_trace"]`. The recorder
 ```
 
 By the end of a run, `agent_trace.json` is the **complete decision log** — one
-file, every agent, in order. The UI's `assemble_field_trace` filters this list
-by section/ref to produce a per-field timeline.
+file, every agent, in order. The UI's `renderFieldDetail` (in `ui/app.js`)
+filters this list by section/ref client-side to produce a per-field timeline.
 
 ---
 
@@ -1521,10 +1501,10 @@ verification_v2.json  ← scorecards
 agent_trace.json      ← the timeline above
 ```
 
-The Streamlit UI then turns this into the per-field experience: select a field,
-get the flowchart (with the field's actual path highlighted), get the timeline
-(filtered to records that touched THIS field), get the per-field rationale +
-section reasoning side-by-side on the Extractor row.
+The browser SPA (`ui/index.html` + `ui/app.js`) then turns this into the per-field
+experience: pick a doc → pick a section tab → click a row → the detail panel shows
+the timeline (filtered client-side to records that touched THIS field) plus the
+per-field rationale + section reasoning side-by-side on the Extractor row.
 
 ---
 
@@ -1556,7 +1536,9 @@ section reasoning side-by-side on the Extractor row.
 | `core/trace_recorder.py` | `record()` + `extend_trace()` — the agent_trace recorder. |
 | `core/persistence.py` | Artifact + Firestore writes. |
 | `verification/*` | The 8 deterministic verifiers. |
-| `ui/phase1/field_trace.py` | `assemble_field_trace` — per-field timeline. |
-| `ui/phase1/field_view.py` | Per-field renderer + pipeline flowchart. |
-| `ui/phase1/evidence.py` | `field_rationale_map` + entity payload builder. |
-| `ui/phase1/views/*` | Streamlit views (Production browser, Entity browser, SME Review). |
+| `ui/app.py` | Flask server — serves `index.html`, `/api/docs` (scans `local_runs/artifacts/`), and `/artifacts/<doc>/<file>`. |
+| `ui/index.html` | Single HTML page — dashboard queue + per-doc review with four section tabs. |
+| `ui/app.js` | Main JS module (`window.app`). `renderFieldDetail` assembles the per-field timeline client-side from `agent_trace.json` + `extraction_v2.json`. |
+| `ui/agent-trace.js` | Renders the per-field agent timeline. |
+| `ui/pdf-viewer.js` | PDF viewer with page-highlight support. |
+| `ui/styles.css` | All styling. |

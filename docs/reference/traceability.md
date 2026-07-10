@@ -24,9 +24,9 @@ preserved so it cross-references the milestone history.
 | M7 | `gate_p3_m7_vmaw_resolution.py` | `pipeline/vmaw.py` — EC/CITE/VA, auto-apply grounded, hold contested | overview §7 |
 | M8a | `gate_p3_m8a_token_geometry.py` | `preprocess/word_geometry.py`, entity highlight mapper | components §2 / §9 |
 | M8b | `gate_p3_m8b_agent_trace.py` | `pipeline/agent_trace.py` — per-agent trace, ordered, PHI-safe | overview §3 |
-| M8c | `gate_p3_m8c_field_timeline.py` | `ui/phase1/field_trace.py` — merged timeline + **linking phase** + plain/technical | components §9 |
-| M8d | `gate_p3_m8d_review_model.py` | `ui/phase1/sme_decisions.py` — review model + decision apply | components §9 |
-| M8e | `gate_p3_m8e_entity_explorer.py` | `ui/phase1/components/entity_explorer.py`, `ui/phase1/evidence.py` — entity payload (boxes/status/links/trace) + canvas + provenance array/map read | components §9 |
+| M8c | `gate_p3_m8c_field_timeline.py` | server-side timeline assembly used by the SPA's `renderFieldDetail` — merged timeline + **linking phase** + plain/technical | components §9 |
+| M8d | `gate_p3_m8d_review_model.py` | SME review model + decision apply (applied client-side in `ui/app.js` against `escalation_queue.json`) | components §9 |
+| M8e | `gate_p3_m8e_entity_explorer.py` | entity payload (boxes/status/links/trace) + canvas + provenance array/map read — rendered by `ui/app.js` + `ui/pdf-viewer.js` | components §9 |
 | M9 | `gate_p3_m9_production_conversion.py` | `transform/to_production.py`, `config/production_mapping.yaml` — reshape/fold/filter | schema §6 |
 | M10b | `gate_p3_m10b_attribution_verifier.py` | `verification/attribution.py`, `config/attribution_map.yaml` — owner-keyed attribution | components §5 |
 | M10d | `gate_p3_m10d_contested_metrics.py` | `pipeline/link_metrics.py` — per-type contested-rate metrics | components §6 |
@@ -51,7 +51,7 @@ migration log + locked decisions: [`docs/migration/genomic_pathology_v4_plan.md`
 | M6 | `gate_v4_m6_verifier_configs.py` | `verification/hgvs_validity.py` (wired), `pipeline/triage.py` (`invalid_hgvs`→escalate), `pipeline/graph_linear.py` (`drop_disabled_section_errors`) — verifier suite retarget | components §5 |
 | M7 | `gate_v4_m7_scoring.py` | `scripts/score_against_ground_truth.py` (Genomic_Variant_umbrella), `ground_truth/demo_v4.json`, `verification/schema_validator.py` (`disabled_sections`) — score 4 sections | schema §6 |
 | M8 | `gate_v4_m8_production.py` | `transform/to_production.py` — flat-tolerant biomarkers + fold the separate variant section | schema §6 |
-| M9 | `gate_v4_m9_ui.py` | `ui/phase1/views/extraction_v2_view.py`, `ui/phase1/views/overview.py` — render variants + flat biomarkers; hide disabled | components §9 |
+| M9 | `gate_v4_m9_ui.py` | `ui/index.html` + `ui/app.js` — render variants + flat biomarkers in the section-tab table; hide disabled sections | components §9 |
 | M10 | `gate_v4_m10_field_rules.py` | `config/prompts/system/extractor.j2` + v4 team prompts — `" | "` concat + VERBATIM/DERIVED/null/count discipline | schema |
 
 ## Phase 2 gates (extraction + linking + verifier suite + scoring)
