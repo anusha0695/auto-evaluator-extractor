@@ -120,6 +120,8 @@
       <p>Overview of all genomic extraction runs ready for SME review</p>
     </div>
     
+    <!-- Row 1 — Pipeline stats (existing, from extractor output) -->
+    <div class="dashboard-stats-row-label">Pipeline stats</div>
     <div class="dashboard-stats-row">
       <div class="dash-stat-card">
         <div class="dash-stat-val" id="dashStatTotal">0</div>
@@ -136,6 +138,27 @@
       <div class="dash-stat-card blue">
         <div class="dash-stat-val" id="dashStatPending">0</div>
         <div class="dash-stat-lbl">Pending / In Progress</div>
+      </div>
+    </div>
+
+    <!-- Row 2 — Review metrics (Q11 B — NEW, from SME actions on submitted docs) -->
+    <div class="dashboard-stats-row-label review-stats-row-label">Review metrics <span style="font-weight:400;color:var(--g500);font-size:.7rem">(aggregate across submitted docs)</span></div>
+    <div class="dashboard-stats-row review-stats-row">
+      <div class="dash-stat-card review">
+        <div class="dash-stat-val" id="reviewStatAccuracy">—</div>
+        <div class="dash-stat-lbl">Accuracy</div>
+      </div>
+      <div class="dash-stat-card review">
+        <div class="dash-stat-val" id="reviewStatPrecision">—</div>
+        <div class="dash-stat-lbl">Precision</div>
+      </div>
+      <div class="dash-stat-card review">
+        <div class="dash-stat-val" id="reviewStatRecall">—</div>
+        <div class="dash-stat-lbl">Recall</div>
+      </div>
+      <div class="dash-stat-card review">
+        <div class="dash-stat-val" id="reviewStatProgress">0 / 0</div>
+        <div class="dash-stat-lbl">Fields reviewed / total</div>
       </div>
     </div>
 
@@ -157,7 +180,12 @@
             <th>Document ID</th>
             <th>Pipeline Verdict</th>
             <th>Escalations</th>
-            <th style="width: 120px; text-align: center;">Action</th>
+            <th style="width: 100px;">SME Status</th>
+            <th style="width: 70px; text-align: right;">Acc</th>
+            <th style="width: 70px; text-align: right;">Prec</th>
+            <th style="width: 70px; text-align: right;">Rec</th>
+            <th style="width: 100px; text-align: right;">Fields</th>
+            <th style="width: 150px; text-align: center;">Action</th>
           </tr>
         </thead>
         <tbody id="dashboardTableBody">
@@ -167,8 +195,20 @@
     </div>
   </div>
 
-  <!-- DETAILED DOCUMENT REVIEW VIEW -->
-  <div id="documentView" class="app-body" style="display: none; grid-template-columns: 300px 1fr 1.4fr">
+  <!-- Save indicator (transient) + error banner (persistent) for FR-3.3 / NFR-5.2 -->
+  <div id="saveErrorBanner" class="save-error-banner" role="alert"></div>
+  <div id="saveIndicator" class="save-indicator" aria-live="polite"></div>
+
+  <!-- Report-missing modal container (populated dynamically by openMissingRecordForm) -->
+  <div id="missingRecordModal" class="missing-record-modal"></div>
+
+  <!-- Submit-confirm dialog container (populated dynamically by submitDocument) -->
+  <div id="submitConfirmModal" class="missing-record-modal"></div>
+
+  <!-- DETAILED DOCUMENT REVIEW VIEW
+       Grid: sidebar | handle | center | handle | right panel — drag the 6px
+       handles to resize (see setupResizeHandles in app.js). -->
+  <div id="documentView" class="app-body" style="display: none; grid-template-columns: 300px 6px 1fr 6px 1.4fr">
     <!-- LEFT SIDEBAR -->
     <aside class="sidebar">
       <div class="sidebar-section">
@@ -177,16 +217,19 @@
       </div>
 
       <div class="sidebar-section">
-        <h3>SME Decision</h3>
-        <div class="decision-status"><span class="status-dot" id="smeStatusDot"></span><span>Current: </span><span id="smeStatusText" style="font-weight:600">Pending</span></div>
+        <h3>Submit Review</h3>
+        <div class="decision-status"><span class="status-dot" id="smeStatusDot"></span><span>Status: </span><span id="smeStatusText" style="font-weight:600">Not started</span></div>
         <input class="sme-input" type="text" id="smeReviewer" placeholder="Enter your name (required)">
         <div class="btn-group">
-          <button class="btn btn-accept" onclick="window.app.smeDecision('accept')">✓ Accept</button>
-          <button class="btn btn-reject" onclick="window.app.smeDecision('reject')">✕ Reject</button>
+          <!-- Q12 A: repurposed Accept → Submit Document; Reject removed (record-level covers it). -->
+          <button class="btn btn-accept" id="btnSubmitDoc" onclick="window.app.submitDocument()">📤 Submit Document</button>
         </div>
         <div id="smeMsg" style="font-size:.7rem;color:var(--g400);margin-top:8px"></div>
+        <!-- Submitted banner (visible only when submission_status === 'submitted') -->
+        <div id="submittedBanner" class="submitted-banner"></div>
       </div>
     </aside>
+    <div class="resize-handle" id="resizeHandleLeft" title="Drag to resize sidebar"></div>
     <!-- CENTER PANEL -->
     <main class="center-panel">
       <div class="section-tabs" id="sectionTabs">
@@ -205,6 +248,7 @@
       </div>
       <div class="field-detail empty" id="fieldDetail"><span>← Click a field row to see traceability details</span></div>
     </main>
+    <div class="resize-handle" id="resizeHandleRight" title="Drag to resize the PDF panel"></div>
     <!-- RIGHT PANEL -->
     <div class="right-panel">
       <div class="right-tabs">
@@ -217,7 +261,10 @@
             <div class="page-nav"><span>Page</span><button id="prevPage" onclick="window.pdfViewer.prevPage()">‹</button><span id="pageNum">1</span><button id="nextPage" onclick="window.pdfViewer.nextPage()">›</button></div>
             <div class="zoom-controls"><button onclick="window.pdfViewer.zoom(-0.15)">−</button><button onclick="window.pdfViewer.zoom(0.15)">+</button><button class="block-toggle on" id="blockToggle" onclick="window.pdfViewer.toggleBlocks()">BLOCKS</button></div>
           </div>
-          <div class="pdf-canvas-wrap" id="pdfCanvasWrap"><div class="pdf-page-container" id="pdfPageContainer"><canvas id="pdfCanvas"></canvas><div id="blockOverlays"></div></div></div>
+          <div class="pdf-canvas-wrap" id="pdfCanvasWrap">
+            <div class="pdf-loading-placeholder" id="pdfLoadingPlaceholder">📄 Waiting for the PDF to load…</div>
+            <div class="pdf-page-container" id="pdfPageContainer"><canvas id="pdfCanvas"></canvas><div id="blockOverlays"></div></div>
+          </div>
         </div>
         <div class="right-pane" id="tracePane"><div class="trace-timeline" id="traceTimeline"><div class="loading-spinner">Loading agent trace…</div></div></div>
       </div>

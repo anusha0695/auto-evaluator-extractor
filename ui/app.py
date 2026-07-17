@@ -19,13 +19,47 @@ Configuration (all via environment variables):
 """
 import io
 import os
+import sys
 from pathlib import Path
+
+# Make this script runnable BOTH via `make portal` (which sets PYTHONPATH=.)
+# AND via a bare `python ui/app.py` (which doesn't). In the bare case,
+# sys.path only contains `ui/`, and `core/` sits at the repo root — a sibling
+# of ui — so `import core.env_loader` would fail. Adding the repo root
+# here makes the import resolve either way.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+# Also ensure the ui/ directory itself is importable so `from schemas import ...`
+# resolves regardless of how the app is invoked (test_client, make portal, or
+# `python ui/app.py`). The review layer imports flat names for module isolation.
+_UI_DIR_FOR_PATH = Path(__file__).resolve().parent
+if str(_UI_DIR_FOR_PATH) not in sys.path:
+    sys.path.insert(0, str(_UI_DIR_FOR_PATH))
 
 # Load `.env` into os.environ before any env-driven configuration below.
 # `core.env_loader` does this on import (idempotent, no override of shell env).
-import core.env_loader  # noqa: F401  — must be BEFORE the env reads below
+# Fallback to a direct dotenv call if `core` isn't importable — keeps this
+# script functional in stripped-down checkouts.
+try:
+    import core.env_loader  # noqa: F401  — imported for side effect (load .env)
+except ImportError:
+    try:
+        from dotenv import load_dotenv
+        _env_file = _REPO_ROOT / ".env"
+        if _env_file.is_file():
+            load_dotenv(_env_file, override=False)
+    except ImportError:
+        pass  # dotenv also missing — rely on shell env only
 
-from flask import Flask, abort, jsonify, send_file, send_from_directory
+from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+
+# Review layer (isolated ui/ module per NFR-1.2 of sme_capture_requirements.md).
+# These imports use the flat module names (see sys.path insert above).
+from field_id_generator import generate_field_ids
+from review_store import EXTRACTION_FILE, get_review_store
+from schemas import ActionType, ReviewAction
 
 # Resolve paths relative to project root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -191,6 +225,212 @@ def serve_artifact(doc_id, filename):
         abort(404, description=f"Artifact not found: {doc_id}/{filename}")
 
     return send_file(filepath, mimetype=mimetype)
+
+
+# ══════════════════════════════════════════════════════════════
+# ── SME Review capture endpoints (DR-4 in sme_capture_requirements.md) ──
+# ══════════════════════════════════════════════════════════════
+#
+# 7 endpoints under /api/review/* backed by ui/review_store.py.
+# All persistence + merge logic lives in the review_store; these routes
+# are thin adapters that validate input, call the store, and JSONify the
+# result. Same env vars (GCS_ARTIFACTS_BUCKET) select the storage backend
+# — no separate configuration.
+
+# Lazy singleton — matches the _bucket() pattern above. The store's factory
+# reads env vars at construction time; deferring gives the caller a chance
+# to set env before the first request lands.
+_review_store_singleton = None
+
+
+def _review_store():
+    """Return the ReviewStore, initializing on first call."""
+    global _review_store_singleton
+    if _review_store_singleton is None:
+        _review_store_singleton = get_review_store()
+    return _review_store_singleton
+
+
+def _validate_doc_id(doc_id: str) -> None:
+    """Path-traversal defense — mirror the rule used in /artifacts/."""
+    if "/" in doc_id or ".." in doc_id or not doc_id:
+        abort(400, description=f"invalid doc_id: {doc_id!r}")
+
+
+def _validate_action_id(action_id: str) -> None:
+    if "/" in action_id or ".." in action_id or not action_id:
+        abort(400, description=f"invalid action_id: {action_id!r}")
+
+
+# ── GET /api/review/<doc_id>/field-ids ────────────────────────
+
+@app.route("/api/review/<doc_id>/field-ids")
+def get_review_field_ids(doc_id: str):
+    """
+    Return the list of stable field IDs for a doc (FR-1).
+    Generated deterministically from extraction_v2.json.
+    """
+    _validate_doc_id(doc_id)
+    store = _review_store()
+    extraction = store.backend.read_json(doc_id, EXTRACTION_FILE)
+    if extraction is None:
+        abort(404, description=f"extraction not found for doc: {doc_id}")
+    ids = generate_field_ids(extraction)
+    return jsonify({"field_ids": [fi.to_dict() for fi in ids]})
+
+
+# ── GET /api/review/<doc_id>/state ────────────────────────────
+
+@app.route("/api/review/<doc_id>/state")
+def get_review_state(doc_id: str):
+    """
+    Return current review state + computed metrics + progress summary.
+    Used by the UI on doc open to restore prior actions (FR-3.4, FR-5.1).
+    """
+    _validate_doc_id(doc_id)
+    store = _review_store()
+    state = store.load_state(doc_id)
+    metrics = store.compute_doc_metrics(doc_id)
+
+    # submission_status of "draft" but zero actions → "not_started" surface state
+    surface_status = state.submission_status
+    if state.submission_status == "draft" and not state.actions:
+        surface_status = "not_started"
+
+    return jsonify({
+        "state": state.to_dict(),
+        "metrics": metrics.to_dict(),
+        "progress": {
+            "fields_reviewed": metrics.fields_reviewed,
+            "fields_total": metrics.fields_total,
+            "submission_status": surface_status,
+        },
+    })
+
+
+# ── POST /api/review/<doc_id>/action ──────────────────────────
+
+@app.route("/api/review/<doc_id>/action", methods=["POST"])
+def post_review_action(doc_id: str):
+    """
+    Autosave one SME action (FR-3.1).
+
+    Body:
+      {
+        "field_id": "Genomic_Variants[0].amino_acid_change",
+        "action":   "correct",
+        "original_value": "p.V600E",
+        "corrected_value": "p.Val600Glu",
+        "natural_key": null   // optional
+      }
+    """
+    _validate_doc_id(doc_id)
+    payload = request.get_json(silent=True) or {}
+
+    action_str = payload.get("action")
+    try:
+        action_type = ActionType(action_str)
+    except (ValueError, TypeError):
+        abort(400, description=f"invalid action type: {action_str!r}")
+
+    field_id = payload.get("field_id")
+    if not field_id or not isinstance(field_id, str):
+        abort(400, description="field_id is required")
+
+    action = ReviewAction(
+        action_id="",       # auto-assigned by the store
+        field_id=field_id,
+        action=action_type,
+        timestamp="",       # auto-assigned by the store
+        natural_key=payload.get("natural_key"),
+        original_value=payload.get("original_value"),
+        corrected_value=payload.get("corrected_value"),
+    )
+    saved = _review_store().save_action(doc_id, action)
+    return jsonify({
+        "action_id": saved.action_id,
+        "timestamp": saved.timestamp,
+        "saved": True,
+    })
+
+
+# ── POST /api/review/<doc_id>/submit ──────────────────────────
+
+@app.route("/api/review/<doc_id>/submit", methods=["POST"])
+def post_review_submit(doc_id: str):
+    """
+    Commit the review (FR-4 / FR-8).
+
+    Body: {"force": false, "reviewer_id": "alice"}
+
+    Response is SubmitResult.to_dict() — either:
+      {"status": "submitted", "ground_truth_path": "..."}
+    or (when force=false and untouched fields exist):
+      {"status": "confirm_required", "unreviewed_count": N, "unreviewed_fields": [...]}
+    """
+    _validate_doc_id(doc_id)
+    payload = request.get_json(silent=True) or {}
+    force = bool(payload.get("force", False))
+    reviewer_id = payload.get("reviewer_id")
+    try:
+        result = _review_store().submit(doc_id, force=force, reviewer_id=reviewer_id)
+    except FileNotFoundError as e:
+        abort(404, description=str(e))
+    return jsonify(result.to_dict())
+
+
+# ── POST /api/review/<doc_id>/reopen ──────────────────────────
+
+@app.route("/api/review/<doc_id>/reopen", methods=["POST"])
+def post_review_reopen(doc_id: str):
+    """
+    Flip a submitted doc back to draft (FR-5.2). No-op if not submitted.
+    ground_truth.json remains on disk until next submit overwrites.
+    """
+    _validate_doc_id(doc_id)
+    _review_store().reopen(doc_id)
+    return jsonify({"submission_status": "draft"})
+
+
+# ── GET /api/review/metrics ───────────────────────────────────
+
+@app.route("/api/review/metrics")
+def get_review_metrics_aggregate():
+    """
+    Landing-page dashboard payload (FR-7.1, FR-7.2).
+
+    Returns:
+      {
+        "aggregate": {...Metrics.to_dict()...},
+        "per_doc":  [
+          {doc_id, submission_status, metrics|null, fields_reviewed, fields_total, submitted_at},
+          ...
+        ]
+      }
+    """
+    aggregate, per_doc = _review_store().compute_all_metrics()
+    return jsonify({"aggregate": aggregate.to_dict(), "per_doc": per_doc})
+
+
+# ── DELETE /api/review/<doc_id>/action/<action_id> ────────────
+
+@app.route("/api/review/<doc_id>/action/<action_id>", methods=["DELETE"])
+def delete_review_action(doc_id: str, action_id: str):
+    """
+    Undo one action — marks it as superseded per DR-2.2.
+    The row is retained (append-only); the effective state ignores it.
+
+    Returns 404 if the action doesn't exist or is already superseded.
+    """
+    _validate_doc_id(doc_id)
+    _validate_action_id(action_id)
+    superseded_at = _review_store().supersede_action(doc_id, action_id)
+    if superseded_at is None:
+        abort(404, description=f"action not found or already superseded: {action_id}")
+    return jsonify({
+        "deleted_action_id": action_id,
+        "superseded_at": superseded_at,
+    })
 
 
 # ── Run ────────────────────────────────────────────────────────

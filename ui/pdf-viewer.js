@@ -21,16 +21,26 @@
     pdfjsLib.GlobalWorkerOptions.workerSrc =
       'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-    // Restore the canvas container
+    // Restore the canvas container + placeholder (fix: PDF area looked blank before load)
     const wrap = document.getElementById('pdfCanvasWrap');
     if (!wrap.querySelector('#pdfPageContainer')) {
-      wrap.innerHTML = '<div class="pdf-page-container" id="pdfPageContainer"><canvas id="pdfCanvas"></canvas><div id="blockOverlays"></div></div>';
+      wrap.innerHTML = '<div class="pdf-loading-placeholder" id="pdfLoadingPlaceholder">📄 Loading PDF…</div>'
+                     + '<div class="pdf-page-container" id="pdfPageContainer"><canvas id="pdfCanvas"></canvas><div id="blockOverlays"></div></div>';
     }
+    const placeholder = document.getElementById('pdfLoadingPlaceholder');
+    if (placeholder) placeholder.style.display = 'block';
 
     try {
       pdfDoc = await pdfjsLib.getDocument(dataDir + 'source.pdf').promise;
+      if (placeholder) placeholder.style.display = 'none';
       renderPage(1);
-    } catch (e) { console.error('PDF load failed', e); }
+    } catch (e) {
+      console.error('PDF load failed', e);
+      if (placeholder) {
+        placeholder.textContent = '📄 No PDF available for this document';
+        placeholder.style.display = 'block';
+      }
+    }
   }
 
   async function renderPage(num) {

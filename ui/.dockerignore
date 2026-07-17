@@ -1,0 +1,30 @@
+# Exclude non-runtime files from the Docker image to keep it small + secure.
+
+# Tests — not needed at runtime
+tests/
+pytest.ini
+conftest.py
+
+# Python bytecode / cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Local dev files that shouldn't leak into the image
+.env
+.env.local
+*.log
+
+# The Dockerfile itself and this file don't need to be in the image
+Dockerfile
+.dockerignore

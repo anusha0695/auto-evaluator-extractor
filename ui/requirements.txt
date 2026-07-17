@@ -1,0 +1,21 @@
+# SME Review Portal — UI module scoped dependencies (NFR-1.4).
+#
+# This subset of the root requirements.txt lets the ui/ folder ship as an
+# isolated Docker image without pulling in the pipeline's ML dependencies
+# (spacy, langgraph, google-genai, docai, etc.).
+#
+# Bumping versions:
+#   Keep in loose lockstep with root requirements.txt to avoid drift between
+#   dev workstations and the deployed portal image.
+
+# Web framework — the app itself.
+flask>=3.0.0,<4.0.0
+
+# Optional-but-required-in-prod: GCS backend for artifacts + review store.
+# Only imported lazily inside GCSBackend, so absence-in-local doesn't crash;
+# but production deployments always want it.
+google-cloud-storage>=2.14.0,<4.0.0
+
+# Loads .env into os.environ before app.py reads config. Optional at runtime
+# (the app has a graceful ImportError fallback), but bundling it is standard.
+python-dotenv>=1.0.0,<2.0.0

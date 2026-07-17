@@ -13,6 +13,7 @@
   let verificationData = null, repairLog = [];
   let currentSection = 'report_metadata', selectedField = null;
   let fieldDecisions = {};
+  let recordDecisions = {};  // keyed by server field_id like 'Genomic_Variants[3]' or 'Genomic_Variants[__new_0__]'
   let checkedFields = new Set();
   let allDocsData = [];
 
@@ -20,6 +21,342 @@
     const r = await fetch(dir + file);
     return r.json();
   }
+
+  // ── Review Capture (SME Review Portal, DR-4 endpoints) ─────────────────
+  //
+  // The client uses its own field key format `section::field[idx]` because
+  // the existing code (bulk-select, table rendering) is built on it. The
+  // server uses dot-notation IDs per FR-1 (`Genomic_Variants[3].aa_change`).
+  // Two translation helpers below sit at the network boundary.
+
+  const SECTION_TO_LIST_KEY = {
+    // Maps existing UI section names → the inner list key used by the server.
+    // Same 3 umbrella-wrapper sections + singular report_metadata.
+    'report_metadata': null,  // singular — no list
+    'Genomic_Variant_umbrella': 'Genomic_Variants',
+    'other_molecular_biomarker_umbrella': 'other_molecular_biomarkers',
+    'tested_biomarker_umbrella': 'tested_biomarkers',
+  };
+  const LIST_KEY_TO_SECTION = Object.fromEntries(
+    Object.entries(SECTION_TO_LIST_KEY).filter(([_, v]) => v).map(([k, v]) => [v, k])
+  );
+
+  function fkToServerFieldId(fk) {
+    // Convert client-side fk → server-side field_id (dot notation).
+    // Examples:
+    //   report_metadata::patient_name → report_metadata.patient_name
+    //   Genomic_Variant_umbrella::aa_change[3] → Genomic_Variants[3].aa_change
+    if (typeof fk !== 'string' || !fk.includes('::')) return fk;
+    const [section, fieldPart] = fk.split('::', 2);
+    if (section === 'report_metadata') {
+      return `report_metadata.${fieldPart}`;
+    }
+    const listKey = SECTION_TO_LIST_KEY[section];
+    if (!listKey) return `${section}.${fieldPart}`;   // unknown section — best-effort
+    const idxMatch = fieldPart.match(/^(.+)\[(\d+)\]$/);
+    if (idxMatch) {
+      return `${listKey}[${idxMatch[2]}].${idxMatch[1]}`;
+    }
+    return `${listKey}.${fieldPart}`;   // no index in fieldPart — unusual
+  }
+
+  function serverFieldIdToFk(sid) {
+    // Inverse: dot notation → client fk. Used when hydrating state from the server.
+    if (typeof sid !== 'string') return sid;
+    if (sid.startsWith('report_metadata.')) {
+      return 'report_metadata::' + sid.substring('report_metadata.'.length);
+    }
+    const m = sid.match(/^(\w+)\[(\d+)\]\.(.+)$/);
+    if (m) {
+      const [_, listKey, idx, fieldName] = m;
+      const section = LIST_KEY_TO_SECTION[listKey];
+      if (section) return `${section}::${fieldName}[${idx}]`;
+    }
+    // Record-only ID like "Genomic_Variants[7]" (reject_record target) — leave as-is
+    return sid;
+  }
+
+  function currentDocId() {
+    return DOCS[currentDocIdx] ? DOCS[currentDocIdx].id : null;
+  }
+
+  // ── Save-indicator UX (FR-3.3) ─────────────────────────────────────────
+  // Small "✓ Saved" appears for ~1s next to the last action. A separate
+  // persistent error banner appears (and stays) if a save fails.
+
+  let _saveIndicatorTimeout = null;
+
+  function showSaveIndicator() {
+    const el = document.getElementById('saveIndicator');
+    if (!el) return;
+    el.textContent = '✓ Saved';
+    el.className = 'save-indicator visible';
+    if (_saveIndicatorTimeout) clearTimeout(_saveIndicatorTimeout);
+    _saveIndicatorTimeout = setTimeout(() => {
+      el.className = 'save-indicator';
+    }, 1200);
+  }
+
+  function showSaveError(msg) {
+    const el = document.getElementById('saveErrorBanner');
+    if (!el) return;
+    el.textContent = '⚠ ' + msg + ' — your local changes are unsaved.';
+    el.className = 'save-error-banner visible';
+  }
+
+  function clearSaveError() {
+    const el = document.getElementById('saveErrorBanner');
+    if (el) el.className = 'save-error-banner';
+  }
+
+  // ── Server-side save (POST /api/review/<doc>/action) ──────────────────
+
+  async function saveActionToServer(fk, action, opts = {}) {
+    // opts: { originalValue, correctedValue, naturalKey, fieldIdOverride }
+    const docId = currentDocId();
+    if (!docId) return null;
+    const serverFieldId = opts.fieldIdOverride || fkToServerFieldId(fk);
+    const body = {
+      field_id: serverFieldId,
+      action: action,
+      original_value: opts.originalValue !== undefined ? opts.originalValue : null,
+      corrected_value: opts.correctedValue !== undefined ? opts.correctedValue : null,
+      natural_key: opts.naturalKey || null,
+    };
+    try {
+      const r = await fetch(`/api/review/${encodeURIComponent(docId)}/action`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+      const j = await r.json();
+      clearSaveError();
+      showSaveIndicator();
+      return j;
+    } catch (e) {
+      console.error('saveActionToServer failed', e);
+      showSaveError(`Save failed (${e.message || e})`);
+      throw e;
+    }
+  }
+
+  // ── Load prior review state on doc open (FR-3.4) ───────────────────────
+
+  async function hydrateReviewStateFromServer(docId) {
+    // Populate fieldDecisions + recordDecisions from server-persisted actions
+    // so refresh / reopen restores the SME's prior work.
+    fieldDecisions = {};
+    recordDecisions = {};
+    let submissionStatus = 'not_started';
+    let stateBundle = null;
+    try {
+      const r = await fetch(`/api/review/${encodeURIComponent(docId)}/state`);
+      if (!r.ok) return { submissionStatus, stateBundle };
+      stateBundle = await r.json();
+      const state = stateBundle.state;
+      submissionStatus = stateBundle.progress ? stateBundle.progress.submission_status : 'not_started';
+
+      // Rebuild both decision maps from LATEST un-superseded action per field_id.
+      const latestByFieldId = {};
+      for (const a of state.actions || []) {
+        if (a.superseded_at) continue;
+        latestByFieldId[a.field_id] = a;
+      }
+      for (const [serverFieldId, a] of Object.entries(latestByFieldId)) {
+        if (a.action === 'reject_record') {
+          // Record-level — keep in recordDecisions, keyed by server field_id.
+          recordDecisions[serverFieldId] = { status: 'rejected', serverActionId: a.action_id };
+        } else if (a.action === 'add_missing') {
+          recordDecisions[serverFieldId] = {
+            status: 'added',
+            values: a.corrected_value || {},
+            serverActionId: a.action_id,
+          };
+        } else {
+          const fk = serverFieldIdToFk(serverFieldId);
+          if (a.action === 'accept' || a.action === 'implicit_accept') {
+            fieldDecisions[fk] = { status: 'accepted', serverActionId: a.action_id };
+          } else if (a.action === 'correct') {
+            fieldDecisions[fk] = { status: 'corrected', correctedValue: a.corrected_value, serverActionId: a.action_id };
+          } else if (a.action === 'reject') {
+            fieldDecisions[fk] = { status: 'rejected', serverActionId: a.action_id };
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not hydrate review state', e);
+    }
+    return { submissionStatus, stateBundle };
+  }
+
+  // ── Record-level actions (reject_record + add_missing per FR-2, FR-4.3) ─
+  //
+  // Server field_id format for record-scoped actions:
+  //   reject_record  → "Genomic_Variants[3]"   (list name + index, no .field)
+  //   add_missing    → "Genomic_Variants[__new_0__]"  (special __new_N__ marker)
+  //
+  // Client-side these live in `recordDecisions` (separate from fieldDecisions
+  // to avoid conflating record and field concerns in bulk-select logic etc.).
+
+  function sectionToServerListKey(section) {
+    return SECTION_TO_LIST_KEY[section] || null;
+  }
+
+  async function rejectRecord(section, index, event) {
+    if (event) event.stopPropagation();
+    const listKey = sectionToServerListKey(section);
+    if (!listKey) return;
+    const serverFieldId = `${listKey}[${index}]`;
+    const prior = recordDecisions[serverFieldId];
+    recordDecisions[serverFieldId] = { status: 'rejected' };  // optimistic
+    // Re-render the section that this record belongs to
+    rerenderCurrentSection();
+    try {
+      // Uses saveActionToServer with the fieldIdOverride escape hatch —
+      // no fk-to-serverFieldId translation needed for record-level.
+      await saveActionToServer(null, 'reject_record', { fieldIdOverride: serverFieldId });
+    } catch (e) {
+      if (prior) recordDecisions[serverFieldId] = prior; else delete recordDecisions[serverFieldId];
+      rerenderCurrentSection();
+    }
+  }
+
+  async function undoRejectRecord(section, index) {
+    // Locate the action_id in the state and DELETE it via the supersede endpoint.
+    // Simple approach: refetch state, find matching un-superseded action, DELETE.
+    const listKey = sectionToServerListKey(section);
+    if (!listKey) return;
+    const serverFieldId = `${listKey}[${index}]`;
+    const docId = currentDocId();
+    if (!docId) return;
+    try {
+      const r = await fetch(`/api/review/${encodeURIComponent(docId)}/state`);
+      const stateBundle = await r.json();
+      const target = (stateBundle.state.actions || []).find(
+        a => a.field_id === serverFieldId && a.action === 'reject_record' && !a.superseded_at
+      );
+      if (!target) return;
+      await fetch(`/api/review/${encodeURIComponent(docId)}/action/${target.action_id}`, {
+        method: 'DELETE',
+      });
+      delete recordDecisions[serverFieldId];
+      showSaveIndicator();
+      rerenderCurrentSection();
+    } catch (e) {
+      showSaveError(`Undo failed (${e.message || e})`);
+    }
+  }
+
+  // ── Report missing record — dynamic form based on section schema ─────
+  //
+  // Opens a small inline form whose fields are inferred from the first
+  // existing record's keys (skipping provenance/metadata). SME fills in
+  // whatever they know; empty fields are omitted from the record.
+
+  function openMissingRecordForm(section) {
+    const listKey = sectionToServerListKey(section);
+    if (!listKey) return;
+    const records = extraction[section] && extraction[section][listKey];
+    if (!records || !records.length) {
+      alert(
+        'No existing record available in this section to use as a template. ' +
+        'Add at least one record via the pipeline first.'
+      );
+      return;
+    }
+    // Infer field schema from the first existing record — exclude metadata keys
+    const templateFields = Object.keys(records[0]).filter(
+      k => k !== 'provenance' && k !== 'llm_confidence_score'
+           && k !== 'needs_review' && k !== 'review_reason'
+           && k !== 'hgvs_normalized' && !k.startsWith('count_of_')
+    );
+    const modal = document.getElementById('missingRecordModal');
+    if (!modal) return;
+    const inputsHtml = templateFields.map(f => `
+      <div class="mr-form-row">
+        <label>${escHtml(f)}</label>
+        <input type="text" data-field="${escAttr(f)}" class="mr-input" placeholder="(leave blank if unknown)">
+      </div>
+    `).join('');
+    modal.innerHTML = `
+      <div class="mr-scrim" onclick="window.app.cancelMissingRecordForm()"></div>
+      <div class="mr-dialog" role="dialog" aria-labelledby="mrTitle">
+        <h3 id="mrTitle">+ Report missing record: ${escHtml(section.replace('_umbrella', '').replace(/_/g, ' '))}</h3>
+        <p style="font-size:.82rem;color:var(--g500);margin:0 0 12px 0">
+          Fill in the fields you know — the extractor missed this record.
+          Leave blank fields empty.
+        </p>
+        <form id="mrForm" onsubmit="return window.app.submitMissingRecordForm('${escAttr(section)}', event)">
+          ${inputsHtml}
+          <div class="mr-actions">
+            <button type="button" class="btn" onclick="window.app.cancelMissingRecordForm()">Cancel</button>
+            <button type="submit" class="btn btn-accept">Save missing record</button>
+          </div>
+        </form>
+      </div>
+    `;
+    modal.className = 'missing-record-modal visible';
+    // Focus first input
+    setTimeout(() => { const inp = modal.querySelector('.mr-input'); if (inp) inp.focus(); }, 30);
+  }
+
+  function cancelMissingRecordForm() {
+    const modal = document.getElementById('missingRecordModal');
+    if (modal) { modal.className = 'missing-record-modal'; modal.innerHTML = ''; }
+  }
+
+  async function submitMissingRecordForm(section, event) {
+    if (event) event.preventDefault();
+    const listKey = sectionToServerListKey(section);
+    if (!listKey) return false;
+    const modal = document.getElementById('missingRecordModal');
+    if (!modal) return false;
+    // Collect non-empty inputs into a new record dict
+    const record = {};
+    modal.querySelectorAll('.mr-input').forEach(inp => {
+      const val = (inp.value || '').trim();
+      if (val) record[inp.dataset.field] = val;
+    });
+    if (!Object.keys(record).length) {
+      alert('Please fill in at least one field.');
+      return false;
+    }
+    // Determine a unique __new_N__ marker
+    const existingNew = Object.keys(recordDecisions).filter(k => k.startsWith(`${listKey}[__new_`));
+    const newIdx = existingNew.length;
+    const serverFieldId = `${listKey}[__new_${newIdx}__]`;
+    recordDecisions[serverFieldId] = { status: 'added', values: record };
+    cancelMissingRecordForm();
+    rerenderCurrentSection();
+    try {
+      await saveActionToServer(null, 'add_missing', {
+        fieldIdOverride: serverFieldId,
+        correctedValue: record,
+      });
+    } catch (e) {
+      delete recordDecisions[serverFieldId];
+      rerenderCurrentSection();
+    }
+    return false;
+  }
+
+  // ── Real reject (sets field value to null in ground_truth per FR-4.3) ─
+  async function rejectFieldValue(fk, event) {
+    if (event) event.stopPropagation();
+    const prior = fieldDecisions[fk];
+    fieldDecisions[fk] = { status: 'rejected' };   // optimistic
+    renderExtractionTable();
+    renderFieldDetail(null);
+    try {
+      await saveActionToServer(fk, 'reject');
+    } catch (e) {
+      // Rollback on failure
+      if (prior) fieldDecisions[fk] = prior; else delete fieldDecisions[fk];
+      renderExtractionTable();
+    }
+  }
+
 
   async function fetchDocList() {
     try {
@@ -62,7 +399,61 @@
 
     renderDocList();
     renderAggregateStats();
+    setupResizeHandles();   // Fix (user feedback): drag to resize panel widths
     showDashboard();
+  }
+
+  // ── Draggable column dividers (fix: resize each tab width) ────────────
+  //
+  // Two 6px handles between sidebar / center / right panel let SME drag to
+  // adjust widths. Widths are tracked in px on documentView.style.gridTemplateColumns
+  // so resize survives re-renders. Min widths prevent panels from collapsing.
+  function setupResizeHandles() {
+    const view = document.getElementById('documentView');
+    if (!view || view._resizeHandlesReady) return;
+    view._resizeHandlesReady = true;
+
+    const configs = [
+      { id: 'resizeHandleLeft',  col: 0, min: 200, max: 600 },   // sidebar
+      { id: 'resizeHandleRight', col: 4, min: 300, max: 1200 },  // right panel
+    ];
+    configs.forEach(cfg => {
+      const handle = document.getElementById(cfg.id);
+      if (!handle) return;
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const style = getComputedStyle(view);
+        const cols = style.gridTemplateColumns.split(' ').map(v => parseFloat(v));
+        // cols = [sidebar, handle, center, handle, right]
+        const startVal = cols[cfg.col];
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        function onMove(ev) {
+          const dx = ev.clientX - startX;
+          const newCols = [...cols];
+          if (cfg.col === 0) {
+            // Left handle drag: sidebar grows/shrinks; center absorbs the change
+            newCols[0] = Math.max(cfg.min, Math.min(cfg.max, startVal + dx));
+            newCols[2] = Math.max(300, cols[2] - (newCols[0] - startVal));
+          } else if (cfg.col === 4) {
+            // Right handle drag: right panel is on the other side, so subtract dx
+            newCols[4] = Math.max(cfg.min, Math.min(cfg.max, startVal - dx));
+            newCols[2] = Math.max(300, cols[2] + (startVal - newCols[4]));
+          }
+          view.style.gridTemplateColumns = newCols.map(v => `${Math.round(v)}px`).join(' ');
+        }
+        function onUp() {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    });
   }
 
   async function loadDocument(idx) {
@@ -91,6 +482,13 @@
         loadJSON(doc.dir, 'repair_log.json')
       ]);
     } catch (e) { console.error('Doc load error', e); }
+
+    // FR-3.4 / FR-5.1 — hydrate fieldDecisions from server-persisted actions
+    // so refresh restores prior review work. Sets fieldDecisions + recordDecisions.
+    await hydrateReviewStateFromServer(doc.id);
+    clearSaveError();
+    // Q12 A / Stage 4.2 — render the submitted-banner if this doc has been submitted.
+    renderSubmittedBanner();
 
     document.querySelectorAll('.section-tab').forEach(t => t.classList.remove('active'));
     document.querySelector('[data-section="report_metadata"]').classList.add('active');
@@ -151,13 +549,14 @@
     if (escalatedEl) escalatedEl.textContent = escalated;
     if (pendingEl) pendingEl.textContent = pending;
 
-    // Populate table
+    // Populate table (Stage 4.3 — extended with SME review columns)
     const tbody = document.getElementById('dashboardTableBody');
     if (tbody) {
       tbody.innerHTML = '';
       allDocsData.forEach((d, i) => {
         const tr = document.createElement('tr');
-        
+        tr.dataset.docId = d.id;
+
         // Count total escalations across all bands
         let escCount = 0;
         if (d.escalation && d.escalation.bands) {
@@ -178,10 +577,17 @@
           isClickable = d.verdict !== 'pending';
         }
 
+        // Review columns populated later by populateReviewMetricsIntoDashboard —
+        // rendered as em-dash placeholders now so table shape stays stable.
         tr.innerHTML = `
           <td><strong>${escHtml(d.id)}</strong></td>
           <td><span class="verdict-badge ${verdictClass}">${escHtml(d.verdict)}</span></td>
           <td><span class="escalation-badge-count ${escCount > 0 ? 'active' : 'zero'}">${escCount} escalation(s)</span></td>
+          <td class="review-status-cell" data-review-col="status"><span class="sme-status-badge not-started">—</span></td>
+          <td class="review-metric-cell" data-review-col="accuracy" style="text-align:right">—</td>
+          <td class="review-metric-cell" data-review-col="precision" style="text-align:right">—</td>
+          <td class="review-metric-cell" data-review-col="recall" style="text-align:right">—</td>
+          <td class="review-fields-cell" data-review-col="fields" style="text-align:right">—</td>
           <td style="text-align: center;">
             <button class="btn btn-accept" style="padding:4px 8px; font-size:0.75rem; ${!isClickable ? 'opacity:0.5; cursor:not-allowed;' : ''}" ${!isClickable ? 'disabled' : ''} onclick="window.app.loadDocument(${i})">
               ${d.verdict === 'pending' ? 'Pending' : 'Review →'}
@@ -191,6 +597,99 @@
         tbody.appendChild(tr);
       });
     }
+
+    // Stage 4.3 — populate the aggregate review metric cards + per-doc columns
+    populateReviewMetricsIntoDashboard();
+  }
+
+  // ── Landing-page review metrics (Q11 B, FR-7) ─────────────────────────
+  //
+  // Fetches /api/review/metrics and populates the second stat row + the
+  // per-doc review columns (Status / Acc / Prec / Rec / Fields). Called from
+  // showDashboard() after the base table is rendered.
+
+  async function populateReviewMetricsIntoDashboard() {
+    try {
+      const r = await fetch('/api/review/metrics');
+      if (!r.ok) return;
+      const data = await r.json();
+
+      // Aggregate cards (top of dashboard)
+      const agg = data.aggregate || {};
+      const setCard = (id, fmt) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = fmt;
+      };
+      const pct = v => (typeof v === 'number' && v > 0) ? Math.round(v * 100) + '%' : '—';
+      setCard('reviewStatAccuracy', pct(agg.accuracy));
+      setCard('reviewStatPrecision', pct(agg.precision));
+      setCard('reviewStatRecall', pct(agg.recall));
+      setCard('reviewStatProgress',
+        `${agg.fields_reviewed || 0} / ${agg.fields_total || 0}`);
+
+      // Per-doc rows — index by doc_id
+      const perDoc = {};
+      (data.per_doc || []).forEach(p => { perDoc[p.doc_id] = p; });
+
+      document.querySelectorAll('#dashboardTableBody tr').forEach(tr => {
+        const docId = tr.dataset.docId;
+        if (!docId || !perDoc[docId]) return;
+        const info = perDoc[docId];
+        const status = info.submission_status || 'not_started';
+        const statusCell = tr.querySelector('[data-review-col="status"]');
+        if (statusCell) {
+          const label = status === 'submitted' ? 'submitted'
+                       : status === 'draft'    ? 'draft'
+                                                : 'not started';
+          statusCell.innerHTML = `<span class="sme-status-badge ${status}">${label}</span>`;
+        }
+        // Metrics only meaningful for submitted docs
+        const metrics = info.metrics;
+        const cellAcc  = tr.querySelector('[data-review-col="accuracy"]');
+        const cellPrec = tr.querySelector('[data-review-col="precision"]');
+        const cellRec  = tr.querySelector('[data-review-col="recall"]');
+        const cellFlds = tr.querySelector('[data-review-col="fields"]');
+        if (metrics) {
+          if (cellAcc)  cellAcc.textContent  = pct(metrics.accuracy);
+          if (cellPrec) cellPrec.textContent = pct(metrics.precision);
+          if (cellRec)  cellRec.textContent  = pct(metrics.recall);
+        }
+        if (cellFlds) {
+          cellFlds.textContent = `${info.fields_reviewed || 0} / ${info.fields_total || 0}`;
+        }
+
+        // Replace Review → button with 📤 Submit for drafts (quick-submit)
+        if (status === 'draft') {
+          const actionCell = tr.lastElementChild;
+          if (actionCell) {
+            actionCell.innerHTML = `
+              <button class="btn btn-accept" style="padding:4px 8px; font-size:0.72rem"
+                      onclick="window.app.quickSubmitDoc('${escAttr(docId)}')">
+                📤 Submit
+              </button>
+              <button class="btn" style="padding:4px 8px; font-size:0.72rem;background:var(--g100);color:var(--g600)"
+                      onclick="event.stopPropagation();window.app.loadDocumentById('${escAttr(docId)}')">
+                Open
+              </button>
+            `;
+          }
+        }
+      });
+    } catch (e) {
+      console.warn('Could not populate review metrics into dashboard', e);
+    }
+  }
+
+  function loadDocumentById(docId) {
+    const idx = DOCS.findIndex(d => d.id === docId);
+    if (idx >= 0) loadDocument(idx);
+  }
+
+  async function quickSubmitDoc(docId) {
+    // Load the doc first (so reviewer name + banner work), then trigger the submit flow.
+    loadDocumentById(docId);
+    // Wait a tick for the DOM to update
+    setTimeout(() => submitDocument(), 300);
   }
 
   function filterQueue(val) {
@@ -332,9 +831,46 @@
 
   function renderFieldActions(fk) {
     const dec = fieldDecisions[fk];
-    if (dec && dec.status === 'accepted') return `<span class="field-status accepted">✓ Accepted</span>`;
-    if (dec && dec.status === 'corrected') return `<span class="field-status corrected" title="Corrected to: ${escHtml(dec.correctedValue)}">✎ Corrected</span>`;
-    return `<button class="btn-field-accept" onclick="window.app.acceptField('${escAttr(fk)}', event)">✓</button><button class="btn-field-reject" onclick="window.app.rejectField('${escAttr(fk)}', event)">✎</button>`;
+    // For reviewed fields, show the status badge + a small ↺ undo button so
+    // the SME can re-edit (fix: user could not change decisions after re-open).
+    const undoBtn = `<button class="btn-field-undo" title="Undo decision — clear this field's review" onclick="window.app.undoFieldDecision('${escAttr(fk)}', event)">↺</button>`;
+    if (dec && dec.status === 'accepted') return `<span class="field-status accepted">✓ Accepted</span>${undoBtn}`;
+    if (dec && dec.status === 'corrected') return `<span class="field-status corrected" title="Corrected to: ${escHtml(dec.correctedValue)}">✎ Corrected</span>${undoBtn}`;
+    if (dec && dec.status === 'rejected') return `<span class="field-status rejected" title="Field marked as wrongly extracted; value → null in ground truth">✕ Rejected</span>${undoBtn}`;
+    return `<button class="btn-field-accept" title="Accept" onclick="window.app.acceptField('${escAttr(fk)}', event)">✓</button>`
+         + `<button class="btn-field-reject" title="Correct value" onclick="window.app.rejectField('${escAttr(fk)}', event)">✎</button>`
+         + `<button class="btn-field-null" title="Reject: mark as wrongly extracted" onclick="window.app.rejectFieldValue('${escAttr(fk)}', event)">✕</button>`;
+  }
+
+  // ── Undo a prior field decision (fix: re-open editing) ────────────────
+  //
+  // Called from the ↺ button next to any accepted/corrected/rejected badge.
+  // Clears the local decision AND DELETEs the server-side action so it's
+  // marked as superseded. Buttons re-appear so the SME can pick a new action.
+  async function undoFieldDecision(fk, event) {
+    if (event) event.stopPropagation();
+    const prior = fieldDecisions[fk];
+    if (!prior) return;
+    const priorActionId = prior.serverActionId;
+    delete fieldDecisions[fk];   // optimistic
+    renderExtractionTable();
+    rerenderCurrentSection();
+    if (!priorActionId) return;  // no server-side ID (freshly saved before hydration)
+    try {
+      const docId = currentDocId();
+      const r = await fetch(
+        `/api/review/${encodeURIComponent(docId)}/action/${encodeURIComponent(priorActionId)}`,
+        { method: 'DELETE' }
+      );
+      if (!r.ok && r.status !== 404) throw new Error(`HTTP ${r.status}`);
+      showSaveIndicator();
+    } catch (e) {
+      // Rollback the local state if server rejects
+      fieldDecisions[fk] = prior;
+      renderExtractionTable();
+      rerenderCurrentSection();
+      showSaveError(`Undo failed (${e.message || e})`);
+    }
   }
 
   function buildRow(section, field, val, prov, tbody) {
@@ -343,7 +879,8 @@
     const tr = document.createElement('tr');
     if (dec && dec.status === 'accepted') tr.classList.add('row-accepted');
     if (dec && dec.status === 'corrected') tr.classList.add('row-corrected');
-    const isReviewed = dec && (dec.status === 'accepted' || dec.status === 'corrected');
+    if (dec && dec.status === 'rejected') tr.classList.add('row-rejected');
+    const isReviewed = dec && (dec.status === 'accepted' || dec.status === 'corrected' || dec.status === 'rejected');
     const displayVal = dec && dec.status === 'corrected' ? dec.correctedValue : (val !== null ? String(val) : null);
     tr.innerHTML = `
       <td><input type="checkbox" class="field-checkbox" ${isReviewed ? 'disabled style="opacity:0.3"' : ''} ${checkedFields.has(fk) ? 'checked' : ''} onchange="window.app.handleFieldCheck('${escAttr(fk)}', this)"></td>
@@ -403,8 +940,9 @@
         <div><h2>🧬 GENOMIC VARIANTS</h2><div class="section-subtitle">${section.Genomic_Variants.length} variant(s) · Select a row, then select a field to review →</div></div>
         <div class="confidence-meter"><div class="conf-label">LLM Confidence</div><div class="conf-value ${confClass}">${confPct}%</div><div class="confidence-bar"><div class="confidence-bar-fill" style="width:${confPct}%;background:${confColor}"></div></div></div>
       </div>
+      <div style="padding:8px 12px 0"><button class="btn-report-missing" onclick="window.app.openMissingRecordForm('Genomic_Variant_umbrella')" title="Report a variant the extractor missed">+ Report missing variant</button></div>
       <div style="padding:0 12px"><table class="variant-summary" id="variantSummaryTable">
-        <thead><tr><th style="width:30px"></th><th>Gene</th><th>Result</th><th>Coding Change</th><th>AA Change</th><th>Significance</th><th style="width:60px"></th></tr></thead>
+        <thead><tr><th style="width:30px"></th><th>Gene</th><th>Result</th><th>Coding Change</th><th>AA Change</th><th>Significance</th><th style="width:60px"></th><th style="width:40px"></th></tr></thead>
         <tbody id="variantSummaryBody"></tbody>
       </table></div>
       <div id="variantDetailArea"></div>
@@ -416,6 +954,11 @@
       const tr = document.createElement('tr');
       if (v.needs_review) tr.classList.add('needs-review');
       if (vi === activeVariantIdx) tr.classList.add('active-variant');
+
+      // Record-level rejection tint (Stage 4.1b)
+      const recFieldId = `Genomic_Variants[${vi}]`;
+      const recDec = recordDecisions[recFieldId];
+      if (recDec && recDec.status === 'rejected') tr.classList.add('record-rejected');
 
       const fields = Object.keys(v).filter(k => k !== 'provenance' && k !== 'hgvs_normalized' && k !== 'needs_review' && k !== 'review_reason');
       const unreviewedFields = fields.filter(field => {
@@ -429,6 +972,11 @@
       });
       const isReviewed = unreviewedFields.length === 0;
 
+      const isRejected = recDec && recDec.status === 'rejected';
+      const rejectBtn = isRejected
+        ? `<button class="btn-record-undo" onclick="event.stopPropagation();window.app.undoRejectRecord('Genomic_Variant_umbrella',${vi})" title="Undo record rejection">↺</button>`
+        : `<button class="btn-record-reject" onclick="event.stopPropagation();window.app.rejectRecord('Genomic_Variant_umbrella',${vi},event)" title="Reject this whole record (row removed from ground truth)">✕</button>`;
+
       tr.innerHTML = `
         <td><input type="checkbox" class="field-checkbox" ${isReviewed ? 'disabled style="opacity:0.3"' : ''} ${allChecked ? 'checked' : ''} onchange="window.app.handleVariantCheck(${vi}, this)"></td>
         <td class="gene-cell">${escHtml(v.gene_studied || '—')}</td>
@@ -436,7 +984,8 @@
         <td class="change-cell">${escHtml(v.coding_dna_change || '—')}</td>
         <td class="change-cell">${escHtml(v.amino_acid_change || '—')}</td>
         <td class="sig-cell" title="${escHtml(v.clinical_significance || '')}">${escHtml((v.clinical_significance || '—').substring(0, 50))}${(v.clinical_significance||'').length > 50 ? '…' : ''}</td>
-        <td>${v.needs_review ? '<span class="review-flag">⚠ Review</span>' : ''}</td>
+        <td>${v.needs_review ? '<span class="review-flag">⚠ Review</span>' : ''}${isRejected ? '<span class="record-rejected-badge">REJECTED</span>' : ''}</td>
+        <td>${rejectBtn}</td>
       `;
       tr.addEventListener('click', (e) => {
         if (e.target.type === 'checkbox') return;
@@ -538,6 +1087,7 @@
         <div><h2>🔬 MOLECULAR BIOMARKERS</h2><div class="section-subtitle">${section.other_molecular_biomarkers.length} biomarker(s)</div></div>
         <div class="confidence-meter"><div class="conf-label">LLM Confidence</div><div class="conf-value ${confClass}">${confPct}%</div><div class="confidence-bar"><div class="confidence-bar-fill" style="width:${confPct}%;background:${confColor}"></div></div></div>
       </div>
+      <div style="padding:8px 12px 0"><button class="btn-report-missing" onclick="window.app.openMissingRecordForm('other_molecular_biomarker_umbrella')" title="Report a biomarker the extractor missed">+ Report missing biomarker</button></div>
       <div class="biomarker-grid">`;
 
     section.other_molecular_biomarkers.forEach((bm, bi) => {
@@ -557,14 +1107,24 @@
       });
       const isReviewed = unreviewedFields.length === 0;
 
+      const bmRecFieldId = `other_molecular_biomarkers[${bi}]`;
+      const bmRecDec = recordDecisions[bmRecFieldId];
+      const bmIsRejected = bmRecDec && bmRecDec.status === 'rejected';
+      const bmRejectBtn = bmIsRejected
+        ? `<button class="btn-record-undo" onclick="event.stopPropagation();window.app.undoRejectRecord('other_molecular_biomarker_umbrella',${bi})" title="Undo record rejection">↺</button>`
+        : `<button class="btn-record-reject" onclick="event.stopPropagation();window.app.rejectRecord('other_molecular_biomarker_umbrella',${bi},event)" title="Reject this whole biomarker record">✕</button>`;
+
       html += `
-        <div class="biomarker-card ${isActive ? 'active-card' : ''}" data-bi="${bi}">
+        <div class="biomarker-card ${isActive ? 'active-card' : ''} ${bmIsRejected ? 'record-rejected' : ''}" data-bi="${bi}">
           <div class="biomarker-card-header" style="gap: 10px;">
             <div style="display:flex;align-items:center;gap:8px">
               <input type="checkbox" class="field-checkbox" ${isReviewed ? 'disabled style="opacity:0.3"' : ''} ${allChecked ? 'checked' : ''} onchange="window.app.handleBiomarkerCheck(${bi}, this, event)">
-              <span class="bm-name">${escHtml(bm.biomarker_name || 'Unknown')}${bm.needs_review ? ' <span class="review-flag">⚠ Review</span>' : ''}</span>
+              <span class="bm-name">${escHtml(bm.biomarker_name || 'Unknown')}${bm.needs_review ? ' <span class="review-flag">⚠ Review</span>' : ''}${bmIsRejected ? ' <span class="record-rejected-badge">REJECTED</span>' : ''}</span>
             </div>
-            <span class="bm-method">${escHtml(bm.method || '—')}</span>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="bm-method">${escHtml(bm.method || '—')}</span>
+              ${bmRejectBtn}
+            </div>
           </div>
           <div class="biomarker-card-body">
             <div class="bm-stat"><div class="bm-stat-label">Result</div><div class="bm-stat-value ${isPositive ? 'positive' : 'negative'}">${escHtml(bm.result || '—')}</div></div>
@@ -660,6 +1220,11 @@
   }
 
   // === TESTED BIOMARKERS — Chip grid with field-level review ===
+  //
+  // Note (Stage 4.1b): tested_biomarkers records are scalar strings, not dicts.
+  // Record-level reject / report-missing buttons are NOT added here in v1 because
+  // openMissingRecordForm assumes dict-shaped records. Scalar-record support is
+  // a small enhancement — see memory (parked TODO).
   function renderTestedView(container) {
     const section = extraction.tested_biomarker_umbrella;
     if (!section) { container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--g400)">No tested biomarkers</div>'; return; }
@@ -808,10 +1373,17 @@
     });
   }
 
-  function acceptField(fk, event) {
+  async function acceptField(fk, event) {
     if (event) event.stopPropagation();
-    fieldDecisions[fk] = { status: 'accepted' };
+    const prior = fieldDecisions[fk];
+    fieldDecisions[fk] = { status: 'accepted' };   // optimistic
     renderExtractionTable();
+    try {
+      await saveActionToServer(fk, 'accept');
+    } catch (e) {
+      if (prior) fieldDecisions[fk] = prior; else delete fieldDecisions[fk];
+      renderExtractionTable();
+    }
   }
 
   function rejectField(fk, event) {
@@ -831,13 +1403,28 @@
     setTimeout(() => { const inp = document.getElementById('correctionInput'); if (inp) inp.focus(); }, 50);
   }
 
-  function submitCorrection(fk) {
+  async function submitCorrection(fk) {
     const input = document.getElementById('correctionInput');
     const val = input ? input.value.trim() : '';
     if (!val) return;
-    fieldDecisions[fk] = { status: 'corrected', correctedValue: val };
+    // Original value = whatever the field currently shows in the extraction
+    // (best-effort — used for audit trail, not for merge logic).
+    const originalValue = selectedField && selectedField.field
+      ? String(selectedField.value ?? '')
+      : null;
+    const prior = fieldDecisions[fk];
+    fieldDecisions[fk] = { status: 'corrected', correctedValue: val };   // optimistic
     renderExtractionTable();
     renderFieldDetail(null);
+    try {
+      await saveActionToServer(fk, 'correct', {
+        originalValue: originalValue,
+        correctedValue: val,
+      });
+    } catch (e) {
+      if (prior) fieldDecisions[fk] = prior; else delete fieldDecisions[fk];
+      renderExtractionTable();
+    }
   }
 
   function cancelCorrection() { renderFieldDetail(selectedField); }
@@ -1078,6 +1665,7 @@
       + `<div class="btn-group" style="margin-top:10px">`
       + `<button class="btn btn-accept" onclick="window.app.acceptField('${escAttr(fk)}', event)">✓ Accept</button>`
       + `<button class="btn btn-reject" onclick="window.app.rejectField('${escAttr(fk)}', event)">✎ Correct</button>`
+      + `<button class="btn btn-null" onclick="window.app.rejectFieldValue('${escAttr(fk)}', event)" title="Reject: mark this field as wrongly extracted (value becomes null in ground truth)">✕ Reject</button>`
       + `<button class="btn" style="background:var(--g100);color:var(--g600)" onclick="window.app.switchRightTab('tracePane')">🔍 Full agent trace</button>`
       + `</div>`;
   }
@@ -1087,14 +1675,310 @@
     document.querySelectorAll('.right-pane').forEach(p => p.classList.toggle('active', p.id === paneId));
   }
 
-  function smeDecision(decision) {
-    const name = document.getElementById('smeReviewer').value.trim();
-    if (!name) { document.getElementById('smeMsg').textContent = 'Reviewer name is required'; return; }
+  // Kept as a no-op stub for backwards compat (nothing in the HTML references it now).
+  function smeDecision(decision) { console.warn('smeDecision is deprecated — use submitDocument'); }
+
+  // ── Doc-level Submit workflow (Q12 A, FR-4, FR-8) ─────────────────────
+  //
+  // Two-step flow:
+  //   1. POST /submit with force=false.
+  //        - status="submitted"        → write banner, refresh state
+  //        - status="confirm_required" → show modal listing untouched fields;
+  //                                      Cancel or Submit Anyway (force=true).
+  //   2. If Submit Anyway: POST /submit with force=true → banner + refresh.
+  //
+  // Uses the existing #smeReviewer input as the reviewer identity (T2 placeholder
+  // for real auth). Requires reviewer name before submitting.
+
+  async function submitDocument() {
+    const docId = currentDocId();
+    if (!docId) return;
+    const reviewerId = document.getElementById('smeReviewer').value.trim();
+    const msgEl = document.getElementById('smeMsg');
+    if (!reviewerId) {
+      if (msgEl) msgEl.textContent = 'Reviewer name is required before submitting.';
+      document.getElementById('smeReviewer').focus();
+      return;
+    }
+    if (msgEl) msgEl.textContent = 'Submitting…';
+
+    try {
+      const r = await fetch(`/api/review/${encodeURIComponent(docId)}/submit`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ force: false, reviewer_id: reviewerId }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+      const result = await r.json();
+
+      if (result.status === 'confirm_required') {
+        openSubmitConfirmModal(docId, reviewerId, result);
+        if (msgEl) msgEl.textContent = '';
+      } else if (result.status === 'submitted') {
+        // Fix (user feedback): after submit, return to the queue automatically.
+        await refreshDashboardData();
+        showDashboard();
+      }
+    } catch (e) {
+      showSaveError(`Submit failed (${e.message || e})`);
+      if (msgEl) msgEl.textContent = '';
+    }
+  }
+
+  function openSubmitConfirmModal(docId, reviewerId, result) {
+    const modal = document.getElementById('submitConfirmModal');
+    if (!modal) return;
+    // User feedback: show ALL unreviewed fields in a scrollable list, each
+    // clickable to jump to the specific field in the doc-review view.
+    const list = result.unreviewed_fields || [];
+    const listItems = list.map(fid => `
+      <li>
+        <button class="unreviewed-item" onclick="window.app.jumpToUnreviewedField('${escAttr(fid)}')" title="Jump to this field">
+          <span class="ui-icon">→</span>
+          <span class="ui-fid">${escHtml(fid)}</span>
+        </button>
+      </li>
+    `).join('');
+    modal.innerHTML = `
+      <div class="mr-scrim" onclick="window.app.cancelSubmitConfirm()"></div>
+      <div class="mr-dialog sc-dialog" role="dialog" aria-labelledby="scTitle">
+        <h3 id="scTitle">Submit ${escHtml(docId)}?</h3>
+        <p style="font-size:.86rem;color:var(--g700);margin:0 0 12px">
+          You haven't reviewed <b>${result.unreviewed_count}</b> field(s).
+          Click any item below to jump to that field, or <b>Submit anyway</b> to
+          implicitly accept them all.
+        </p>
+        <div class="sc-list-header">
+          <span>Unreviewed fields (${list.length})</span>
+          <input type="text" id="scFilter" placeholder="Filter…" oninput="window.app.filterUnreviewedList(this.value)">
+        </div>
+        <ul class="unreviewed-list" id="unreviewedList">
+          ${listItems}
+        </ul>
+        <div class="mr-actions">
+          <button type="button" class="btn" onclick="window.app.cancelSubmitConfirm()">Cancel</button>
+          <button type="button" class="btn btn-accept" onclick="window.app.confirmSubmit('${escAttr(docId)}','${escAttr(reviewerId)}')">Submit anyway (${result.unreviewed_count} implicit accepts)</button>
+        </div>
+      </div>
+    `;
+    modal.className = 'missing-record-modal visible';
+  }
+
+  function filterUnreviewedList(q) {
+    const needle = (q || '').toLowerCase().trim();
+    document.querySelectorAll('#unreviewedList li').forEach(li => {
+      const txt = (li.textContent || '').toLowerCase();
+      li.style.display = (!needle || txt.includes(needle)) ? '' : 'none';
+    });
+  }
+
+  // ── jumpToUnreviewedField(serverFieldId) ──────────────────────────────
+  //
+  // Called from the scrollable unreviewed-list. Given a server field_id like
+  // "Genomic_Variants[3].amino_acid_change" or "report_metadata.Patient_MRN":
+  //   1. Close the submit-confirm modal
+  //   2. Switch to the section tab containing the field
+  //   3. For record-scoped fields, expand the specific record (activeVariantIdx / activeBiomarkerIdx)
+  //   4. Scroll the field row into view + pulse-highlight for ~2s
+
+  function jumpToUnreviewedField(serverFieldId) {
+    cancelSubmitConfirm();
+    if (!serverFieldId) return;
+
+    // Determine target section from the field_id shape
+    let targetSection = null;
+    let recordIndex = -1;
+    let fieldName = null;
+
+    if (serverFieldId.startsWith('report_metadata.')) {
+      targetSection = 'report_metadata';
+      fieldName = serverFieldId.substring('report_metadata.'.length);
+    } else {
+      const m = serverFieldId.match(/^(\w+)\[(\d+)\](?:\.(.+))?$/);
+      if (m) {
+        const [, listKey, idxStr, fname] = m;
+        targetSection = LIST_KEY_TO_SECTION[listKey] || null;
+        recordIndex = parseInt(idxStr, 10);
+        fieldName = fname || null;
+      }
+    }
+
+    if (!targetSection) {
+      showSaveError(`Could not parse field id: ${serverFieldId}`);
+      return;
+    }
+
+    // Set the active record BEFORE switching section — the section renderer
+    // consults activeVariantIdx / activeBiomarkerIdx on render.
+    if (targetSection === 'Genomic_Variant_umbrella' && recordIndex >= 0) {
+      activeVariantIdx = recordIndex;
+    } else if (targetSection === 'other_molecular_biomarker_umbrella' && recordIndex >= 0) {
+      activeBiomarkerIdx = recordIndex;
+    }
+
+    // Switch section tab
+    document.querySelectorAll('.section-tab').forEach(t =>
+      t.classList.toggle('active', t.dataset.section === targetSection)
+    );
+    currentSection = targetSection;
+    selectedField = null;
+    checkedFields.clear();
+    renderExtractionTable();
+    renderFieldDetail(null);
+    updateBulkActionBar();
+
+    // After render completes, find the target field row and scroll to it.
+    // Use requestAnimationFrame so the DOM is up-to-date before we query it.
+    requestAnimationFrame(() => {
+      const row = _findFieldRow(targetSection, recordIndex, fieldName);
+      if (row) {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        row.classList.add('field-row-flash');
+        setTimeout(() => row.classList.remove('field-row-flash'), 2200);
+      }
+    });
+  }
+
+  function _findFieldRow(section, recordIndex, fieldName) {
+    // report_metadata: the extraction table has field-name cells; find one that matches
+    if (section === 'report_metadata' && fieldName) {
+      const rows = document.querySelectorAll('#extractionBody tr');
+      for (const tr of rows) {
+        const nameCell = tr.querySelector('.field-name');
+        if (nameCell && nameCell.textContent.trim() === fieldName) return tr;
+      }
+      return null;
+    }
+    // Record-scoped sections: field rows live in the variant-fields-table
+    // (rendered by renderVariantDetail / renderBiomarker equivalents).
+    if (fieldName) {
+      const rows = document.querySelectorAll('.variant-fields-table tbody tr');
+      for (const tr of rows) {
+        const nameCell = tr.querySelector('.vf-name');
+        if (nameCell && nameCell.textContent.trim() === fieldName) return tr;
+      }
+    }
+    return null;
+  }
+
+  function cancelSubmitConfirm() {
+    const modal = document.getElementById('submitConfirmModal');
+    if (modal) { modal.className = 'missing-record-modal'; modal.innerHTML = ''; }
+  }
+
+  async function confirmSubmit(docId, reviewerId) {
+    cancelSubmitConfirm();
+    const msgEl = document.getElementById('smeMsg');
+    if (msgEl) msgEl.textContent = 'Submitting…';
+    try {
+      const r = await fetch(`/api/review/${encodeURIComponent(docId)}/submit`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ force: true, reviewer_id: reviewerId }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+      const result = await r.json();
+      if (result.status === 'submitted') {
+        // Fix (user feedback): after submit, return to the queue automatically
+        // so the SME immediately sees the updated aggregate metrics.
+        await refreshDashboardData();
+        showDashboard();
+      }
+    } catch (e) {
+      showSaveError(`Submit failed (${e.message || e})`);
+      if (msgEl) msgEl.textContent = '';
+    }
+  }
+
+  async function reopenDocument() {
+    const docId = currentDocId();
+    if (!docId) return;
+    const msgEl = document.getElementById('smeMsg');
+    if (msgEl) msgEl.textContent = 'Reopening…';
+    try {
+      const r = await fetch(`/api/review/${encodeURIComponent(docId)}/reopen`, { method: 'POST' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await refreshAfterSubmit(docId);
+      if (msgEl) msgEl.textContent = 'Reopened for editing.';
+    } catch (e) {
+      showSaveError(`Reopen failed (${e.message || e})`);
+      if (msgEl) msgEl.textContent = '';
+    }
+  }
+
+  async function refreshAfterSubmit(docId) {
+    // Reload state + re-render whatever section is currently visible.
+    await hydrateReviewStateFromServer(docId);
+    renderSubmittedBanner();
+    updateSubmitButtonState();
+    renderExtractionTable();
+    rerenderCurrentSection();
+  }
+
+  function renderSubmittedBanner() {
+    const banner = document.getElementById('submittedBanner');
+    if (!banner) return;
     const dot = document.getElementById('smeStatusDot');
     const text = document.getElementById('smeStatusText');
-    if (decision === 'accept') { dot.className = 'status-dot accepted'; text.textContent = 'Accepted'; }
-    else { dot.className = 'status-dot rejected'; text.textContent = 'Rejected'; }
-    document.getElementById('smeMsg').textContent = `Decision by ${name} at ${new Date().toLocaleTimeString()}`;
+    // Pull the latest submission info from a state fetch
+    const docId = currentDocId();
+    if (!docId) return;
+    fetch(`/api/review/${encodeURIComponent(docId)}/state`).then(r => r.json()).then(bundle => {
+      const state = bundle.state;
+      const metrics = bundle.metrics || {};
+      if (state.submission_status === 'submitted') {
+        const acc = Math.round((metrics.accuracy || 0) * 100);
+        const prec = Math.round((metrics.precision || 0) * 100);
+        const rec = Math.round((metrics.recall || 0) * 100);
+        const submittedAt = state.submitted_at ? state.submitted_at.replace('T', ' ').replace('Z', ' UTC') : '';
+        banner.innerHTML = `
+          <div class="banner-line">✓ Submitted on ${escHtml(submittedAt)} by <b>${escHtml(state.submitted_by || '?')}</b></div>
+          <div class="banner-metrics">Accuracy ${acc}% · Precision ${prec}% · Recall ${rec}%</div>
+          <button class="btn btn-reopen" onclick="window.app.reopenDocument()">↺ Re-open for editing</button>
+        `;
+        banner.className = 'submitted-banner visible';
+        if (dot) dot.className = 'status-dot accepted';
+        if (text) text.textContent = 'Submitted';
+      } else if (state.actions && state.actions.length > 0) {
+        banner.className = 'submitted-banner';
+        banner.innerHTML = '';
+        if (dot) dot.className = 'status-dot';
+        if (text) text.textContent = 'Draft';
+      } else {
+        banner.className = 'submitted-banner';
+        banner.innerHTML = '';
+        if (dot) dot.className = 'status-dot';
+        if (text) text.textContent = 'Not started';
+      }
+    }).catch(() => {});
+  }
+
+  function updateSubmitButtonState() {
+    // Called after refreshAfterSubmit. Nothing needed for v1 — button is always visible.
+    // Reserved for future: disable-during-submit spinner, etc.
+  }
+
+  // Refresh the cached allDocsData so the dashboard reflects the latest state
+  // (metrics, submission status, escalation counts). Called after any submit
+  // so the queue view is up-to-date when we navigate back.
+  async function refreshDashboardData() {
+    if (!DOCS || !DOCS.length) return;
+    allDocsData = [];
+    for (const doc of DOCS) {
+      try {
+        const [esc, trace, ver] = await Promise.all([
+          loadJSON(doc.dir, 'escalation_queue_banded.json'),
+          loadJSON(doc.dir, 'agent_trace.json'),
+          loadJSON(doc.dir, 'verification_v2.json').catch(() => null),
+        ]);
+        const lastStep = trace[trace.length - 1];
+        allDocsData.push({
+          id: doc.id, label: doc.label, dir: doc.dir,
+          escalation: esc, verdict: lastStep ? lastStep.verdict : 'unknown',
+          verification: ver,
+        });
+      } catch (e) { console.warn('refreshDashboardData: failed for', doc.id, e); }
+    }
   }
 
   function onBlockClick(blockId) {
@@ -1117,7 +2001,8 @@
   // ── Bulk Review & Checkbox Management ────────────────────────
   function isReviewed(fk) {
     const dec = fieldDecisions[fk];
-    return dec && (dec.status === 'accepted' || dec.status === 'corrected');
+    // Include 'rejected' — a rejected field IS reviewed; SME made an explicit call.
+    return dec && (dec.status === 'accepted' || dec.status === 'corrected' || dec.status === 'rejected');
   }
 
   function getVisibleUnreviewedFieldKeys() {
@@ -1250,14 +2135,23 @@
     updateBulkActionBar();
   }
 
-  function bulkAccept() {
+  async function bulkAccept() {
     const currentChecked = getCheckedFieldsForCurrentSection();
+    // Optimistic local update first — no partial-state flicker
     currentChecked.forEach(fk => {
       fieldDecisions[fk] = { status: 'accepted' };
       checkedFields.delete(fk);
     });
     rerenderCurrentSection();
     updateSelectAllCheckboxState();
+    // Fire the POSTs in parallel — order doesn't matter, server dedupes by field_id
+    try {
+      await Promise.all(currentChecked.map(fk => saveActionToServer(fk, 'accept')));
+    } catch (e) {
+      // One or more failed; user already saw the error banner via saveActionToServer.
+      // Leave the optimistic state — user can re-Accept individual failed ones.
+      console.warn('bulkAccept: some saves failed', e);
+    }
   }
 
   function bulkCancel() {
@@ -1276,6 +2170,21 @@
     onBlockClick,
     acceptField,
     rejectField,
+    rejectFieldValue,             // Stage 4.1 — real reject (field → null)
+    undoFieldDecision,            // Fix: re-open editing — clear a prior decision
+    rejectRecord,                 // Stage 4.1b — reject whole record
+    undoRejectRecord,             // Stage 4.1b — undo record rejection
+    openMissingRecordForm,        // Stage 4.1b — open add-missing form
+    cancelMissingRecordForm,      // Stage 4.1b — close add-missing form
+    submitMissingRecordForm,      // Stage 4.1b — form submit handler
+    submitDocument,               // Stage 4.2 — Q12 A: repurposed Submit button
+    cancelSubmitConfirm,          // Stage 4.2 — Cancel in the confirm dialog
+    confirmSubmit,                // Stage 4.2 — Submit Anyway in the confirm dialog
+    reopenDocument,               // Stage 4.2 — Re-open a submitted doc
+    jumpToUnreviewedField,        // Fix: scrollable list — click item to jump
+    filterUnreviewedList,         // Fix: scrollable list — text-filter input
+    loadDocumentById,             // Stage 4.3 — for dashboard quick-open by ID
+    quickSubmitDoc,               // Stage 4.3 — per-row Submit button on dashboard
     submitCorrection,
     cancelCorrection,
     focusEscalation,

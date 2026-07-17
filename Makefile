@@ -153,6 +153,29 @@ ui:  ## Launch the Streamlit results browser — usage: make ui PHASE=1
 portal:  ## Launch the Flask SME Review Portal — usage: make portal [PORT=8600]
 	PYTHONPATH=. PORT=$${PORT:-8501} $(PY) ui/app.py
 
+portal-docker-build:  ## Build the isolated SME Portal Docker image (Stage 5)
+	docker build -t sme-portal ui/
+
+portal-docker-run:  ## Run the SME Portal container in local mode (volume-mount artifacts)
+	@echo "Serving portal on http://localhost:8501 — local artifact mode"
+	docker run --rm -p 8501:8501 \
+	  -v $(PWD)/local_runs:/app/local_runs \
+	  -e SME_REVIEWER_ID=$${SME_REVIEWER_ID:-unknown} \
+	  sme-portal
+
+portal-docker-run-gcs:  ## Run in GCS mode — usage: make portal-docker-run-gcs BUCKET=my-bucket [PREFIX=artifacts/] [SA=path/to/sa.json]
+	@if [ -z "$(BUCKET)" ]; then \
+	  echo "Usage: make portal-docker-run-gcs BUCKET=my-bucket [PREFIX=artifacts/] [SA=path/to/sa.json]"; \
+	  exit 1; \
+	fi
+	@echo "Serving portal on http://localhost:8501 — GCS artifact mode (gs://$(BUCKET)/$(if $(PREFIX),$(PREFIX),artifacts/))"
+	docker run --rm -p 8501:8501 \
+	  -e GCS_ARTIFACTS_BUCKET=$(BUCKET) \
+	  -e GCS_ARTIFACTS_PREFIX=$(if $(PREFIX),$(PREFIX),artifacts/) \
+	  -e SME_REVIEWER_ID=$${SME_REVIEWER_ID:-unknown} \
+	  $(if $(SA),-e GOOGLE_APPLICATION_CREDENTIALS=/app/sa.json -v $(realpath $(SA)):/app/sa.json:ro,) \
+	  sme-portal
+
 snapshot:  ## Snapshot a phase to snapshots/phaseN/ — usage: make snapshot PHASE=1
 	$(PY) scripts/snapshot_phase.py --phase $(PHASE)
 

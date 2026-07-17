@@ -479,3 +479,559 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--g100);color:var(-
   background: var(--g200) !important;
   color: var(--g900) !important;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   SME Review Capture (Stage 4.1)
+   — save indicator, error banner, reject action, row-state tinting
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Transient "✓ Saved" badge — appears near the top-right for ~1s after every autosave (FR-3.3) */
+.save-indicator {
+  position: fixed;
+  top: 74px;
+  right: 24px;
+  z-index: 50;
+  padding: 6px 12px;
+  background: #DCFCE7;
+  color: #166534;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid #86EFAC;
+  border-radius: var(--r-sm);
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+}
+.save-indicator.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Persistent error banner — stays until dismissed OR next successful save (NFR-5.2).
+   Positioned below the header. Only visible when .visible is set. */
+.save-error-banner {
+  display: none;
+  padding: 10px 20px;
+  background: #FEE2E2;
+  color: #991B1B;
+  font-size: 0.85rem;
+  font-weight: 500;
+  border-bottom: 2px solid #F87171;
+  text-align: center;
+}
+.save-error-banner.visible { display: block; }
+
+/* Real reject action — sets field to null in ground truth (FR-4.3) */
+.btn-field-null {
+  background: transparent;
+  border: 1px solid var(--g300);
+  color: var(--g600);
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  margin-left: 4px;
+  transition: all 0.1s ease-out;
+}
+.btn-field-null:hover {
+  background: #FEE2E2;
+  color: #991B1B;
+  border-color: #F87171;
+}
+.btn.btn-null {
+  background: transparent;
+  color: var(--g600);
+  border: 1px solid var(--g300);
+}
+.btn.btn-null:hover {
+  background: #FEE2E2;
+  color: #991B1B;
+  border-color: #F87171;
+}
+
+/* Rejected field status pill (in the SME Action column) */
+.field-status.rejected {
+  background: #F3F4F6;
+  color: #6B7280;
+  border: 1px solid #D1D5DB;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+/* Row tint for a rejected field */
+tr.row-rejected {
+  background: #F9FAFB;
+  color: #6B7280;
+}
+tr.row-rejected td:not(:first-child) {
+  text-decoration: line-through;
+  text-decoration-color: #9CA3AF;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SME Review Capture — Stage 4.1b (record-level actions)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Section-header "+ Report missing" button */
+.btn-report-missing {
+  background: transparent;
+  border: 1px dashed var(--g300);
+  color: var(--g600);
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--tr);
+}
+.btn-report-missing:hover {
+  background: #F0FDF4;
+  color: #166534;
+  border: 1px solid #86EFAC;
+}
+
+/* Per-row reject button (variant summary + biomarker card) */
+.btn-record-reject {
+  background: transparent;
+  border: 1px solid var(--g300);
+  color: var(--g500);
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.1s ease-out;
+}
+.btn-record-reject:hover {
+  background: #FEE2E2;
+  color: #991B1B;
+  border-color: #F87171;
+}
+.btn-record-undo {
+  background: #FEF3C7;
+  border: 1px solid #FDE68A;
+  color: #92400E;
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.btn-record-undo:hover { background: #FDE68A; }
+
+/* Rejected-record visual state */
+tr.record-rejected,
+.biomarker-card.record-rejected {
+  background: #FEF2F2 !important;
+  opacity: 0.7;
+}
+tr.record-rejected td:not(:last-child),
+.biomarker-card.record-rejected .bm-name,
+.biomarker-card.record-rejected .bm-stat-value {
+  text-decoration: line-through;
+  text-decoration-color: #FCA5A5;
+}
+.record-rejected-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  margin-left: 6px;
+  background: #FEE2E2;
+  color: #991B1B;
+  border: 1px solid #F87171;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+/* Report-missing modal (form for the add_missing action) */
+.missing-record-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+.missing-record-modal.visible { display: block; }
+.missing-record-modal .mr-scrim {
+  position: absolute; inset: 0;
+  background: rgba(17, 24, 39, 0.45);
+  cursor: pointer;
+}
+.missing-record-modal .mr-dialog {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--white);
+  padding: 24px 28px;
+  border-radius: var(--r-md);
+  box-shadow: 0 20px 40px rgba(0,0,0,0.25);
+  min-width: 440px;
+  max-width: 560px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.missing-record-modal .mr-dialog h3 {
+  margin: 0 0 6px 0;
+  font-size: 1.05rem;
+  color: var(--g900);
+}
+.missing-record-modal .mr-form-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.missing-record-modal .mr-form-row label {
+  font-size: 0.8rem;
+  color: var(--g700);
+  font-weight: 600;
+  text-align: right;
+}
+.missing-record-modal .mr-input {
+  padding: 6px 10px;
+  border: 1px solid var(--g300);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+.missing-record-modal .mr-input:focus {
+  outline: none;
+  border-color: var(--cardinal-red);
+  box-shadow: 0 0 0 3px rgba(240, 78, 68, 0.15);
+}
+.missing-record-modal .mr-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--g100);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SME Review Capture — Stage 4.2 (Submit + Reopen workflow)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Submitted banner in the sidebar — persistent, shows metrics + Re-open button */
+.submitted-banner {
+  display: none;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #F0FDF4;
+  border: 1px solid #86EFAC;
+  border-left: 3px solid #16A34A;
+  border-radius: var(--r-sm);
+  font-size: 0.78rem;
+  color: #166534;
+  line-height: 1.5;
+}
+.submitted-banner.visible { display: block; }
+.submitted-banner .banner-line { font-weight: 600; margin-bottom: 4px; }
+.submitted-banner .banner-metrics {
+  font-size: 0.72rem;
+  color: #15803D;
+  margin-bottom: 8px;
+  font-family: monospace;
+}
+.submitted-banner .btn.btn-reopen {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--white);
+  color: #166534;
+  border: 1px solid #86EFAC;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--tr);
+}
+.submitted-banner .btn.btn-reopen:hover { background: #DCFCE7; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   SME Review Capture — Stage 4.3 (Dashboard extension, Q11 B)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Section labels above each stat row */
+.dashboard-stats-row-label {
+  padding: 0 20px;
+  margin: 8px 0 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--g500);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.dashboard-stats-row-label.review-stats-row-label {
+  margin-top: 16px;
+  color: #166534;
+}
+
+/* Second stat row (review metrics) — subtle green tint to differentiate from pipeline row */
+.dashboard-stats-row.review-stats-row {
+  margin-bottom: 18px;
+}
+.dash-stat-card.review {
+  background: #F0FDF4;
+  border-color: #86EFAC;
+}
+.dash-stat-card.review .dash-stat-val {
+  color: #166534;
+}
+
+/* SME status badges in the dashboard table */
+.sme-status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+.sme-status-badge.submitted {
+  background: #DCFCE7;
+  color: #166534;
+  border: 1px solid #86EFAC;
+}
+.sme-status-badge.draft {
+  background: #FEF3C7;
+  color: #92400E;
+  border: 1px solid #FDE68A;
+}
+.sme-status-badge.not_started,
+.sme-status-badge.not-started {
+  background: var(--g100);
+  color: var(--g500);
+  border: 1px solid var(--g200);
+}
+
+/* Metric cells — right-aligned, monospace for numeric readability */
+.dashboard-table td.review-metric-cell,
+.dashboard-table td.review-fields-cell {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: var(--g700);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   UX Fixes (Stage 4 follow-up)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Fix 2 — Undo button next to a reviewed field's status badge.
+   Lets SME clear a prior decision so buttons re-appear. Essential after Re-open. */
+.btn-field-undo {
+  background: transparent;
+  border: 1px solid var(--g200);
+  color: var(--g500);
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  margin-left: 6px;
+  padding: 0;
+  vertical-align: middle;
+  line-height: 1;
+  transition: all 0.1s ease-out;
+}
+.btn-field-undo:hover {
+  background: #FEF3C7;
+  color: #92400E;
+  border-color: #FDE68A;
+}
+
+/* Fix 3 — PDF controls bar looked broken/empty. Give it a subtle gray tint
+   so it reads as a proper toolbar, and add a placeholder while the PDF loads. */
+.pdf-controls {
+  background: var(--g50) !important;
+  min-height: 44px;
+  gap: 12px;
+}
+.pdf-canvas-wrap {
+  position: relative;
+  min-height: 400px;
+}
+.pdf-loading-placeholder {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--g400);
+  font-size: 0.9rem;
+  padding: 20px 30px;
+  background: var(--g50);
+  border-radius: var(--r-md);
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* Fix 4 — Draggable column dividers between sidebar / center / right panel */
+.resize-handle {
+  background: var(--g100);
+  cursor: col-resize;
+  transition: background 0.15s ease-out;
+  position: relative;
+  z-index: 10;
+}
+.resize-handle:hover {
+  background: var(--cardinal-red);
+}
+.resize-handle::before {
+  /* Vertical dot pattern to signal drag-ability */
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 30px;
+  background: var(--g300);
+  border-radius: 2px;
+  pointer-events: none;
+  transition: background 0.15s ease-out;
+}
+.resize-handle:hover::before {
+  background: var(--white);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Submit-confirm dialog — scrollable unreviewed list (Fix)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Widen the dialog when it holds the scrollable list */
+.mr-dialog.sc-dialog {
+  min-width: 520px;
+  max-width: 640px;
+}
+
+.sc-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--g600);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.sc-list-header input {
+  flex: 0 0 180px;
+  padding: 4px 8px;
+  border: 1px solid var(--g300);
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  font-family: inherit;
+}
+.sc-list-header input:focus {
+  outline: none;
+  border-color: var(--cardinal-red);
+  box-shadow: 0 0 0 3px rgba(240, 78, 68, 0.15);
+}
+
+/* The scrollable list itself */
+.unreviewed-list {
+  list-style: none;
+  margin: 0 0 14px 0;
+  padding: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--g200);
+  border-radius: var(--r-sm);
+  background: var(--g50);
+}
+.unreviewed-list li {
+  margin: 0;
+  padding: 0;
+}
+.unreviewed-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: monospace;
+  font-size: 0.78rem;
+  color: var(--g800);
+  transition: background 0.08s ease-out;
+}
+.unreviewed-item:hover {
+  background: var(--white);
+  color: var(--cardinal-red);
+}
+.unreviewed-item .ui-icon {
+  flex: 0 0 auto;
+  color: var(--g400);
+  font-family: sans-serif;
+  font-weight: 700;
+  transition: color 0.08s;
+}
+.unreviewed-item:hover .ui-icon { color: var(--cardinal-red); }
+.unreviewed-item .ui-fid {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Row-flash highlight when the SME jumps to a field */
+@keyframes fieldRowFlash {
+  0%, 100% { background: transparent; }
+  15%      { background: #FEF3C7; box-shadow: inset 0 0 0 2px #FBBF24; }
+  100%     { background: transparent; box-shadow: none; }
+}
+.field-row-flash {
+  animation: fieldRowFlash 2s ease-out;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PDF toolbar — BLOCKS button size + spacing fix (user screenshot)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Explicit height + shape match with other toolbar buttons so BLOCKS doesn't
+   look like a foreign element hanging outside the toolbar. */
+.pdf-controls .block-toggle {
+  height: 30px !important;
+  padding: 0 10px !important;
+  min-width: 62px;
+  width: auto !important;
+  border-radius: 4px !important;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Softer 'on' indicator — was full cardinal red outline; now subtle red pill. */
+.pdf-controls .block-toggle.on {
+  background: #FEF2F2;
+  color: #B91C1C;
+  border-color: #F87171;
+}
+.pdf-controls .block-toggle.on:hover {
+  background: #FEE2E2;
+  border-color: #DC2626;
+}
+
+/* Ensure zoom-controls group has breathing room from the right edge of the panel. */
+.pdf-controls .zoom-controls {
+  gap: 6px;
+  margin-right: 4px;
+}
